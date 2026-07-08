@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+models_store/*.joblib
+models_store/*.pkl
+
+.env
+.venv/
+venv/
+*.egg-info/
+CLAUDE.md
