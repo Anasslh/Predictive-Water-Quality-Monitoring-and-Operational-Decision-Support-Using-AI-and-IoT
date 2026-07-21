@@ -1,0 +1,7 @@
+{
+  "model_path": "/mnt/c/Users/aanas/Downloads/NU internship/Predictive-Water-Quality-Monitoring-and-Operational-Decision-Support-Using-AI-and-IoT/models_store/turbidity/Turbidity_xgb_turbidity_bench_d2_n50_lr001_20260721_120801.pkl",
+  "approval_id": "Turbidity_xgb_turbidity_bench_d2_n50_lr001_20260721_100801_benchmark_freeze",
+  "promoted_at": "2026-07-21T10:08:01.360122+00:00",
+  "parameter_name": "Turbidity",
+  "model_version": "xgb_turbidity_bench_d2_n50_lr001"
+}

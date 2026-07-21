@@ -1,0 +1,35 @@
+{
+  "_schema_version": "1.0",
+  "_doc": "See config/README_sensors_config.md for field descriptions.",
+  "timestamp_column_candidates": ["Date", "timestamp", "date", "Time"],
+  "sensors": [
+    {
+      "column_name": "EC",
+      "parameter_name": "EC",
+      "unit": "µS/cm",
+      "wqi_standard": 400,
+      "co_variables": ["pH", "Turbidity"],
+      "lag_hours": [24, 48, 72],
+      "rolling_hours": [72, 168],
+      "_note": "Production model already frozen (ec_xgboost_v1_final). Onboarding skipped."
+    },
+    {
+      "column_name": "Turbidity",
+      "parameter_name": "Turbidity",
+      "unit": "NTU",
+      "wqi_standard": 5,
+      "co_variables": ["pH", "EC"],
+      "lag_hours": [24, 48, 72],
+      "rolling_hours": [72, 168]
+    },
+    {
+      "column_name": "pH",
+      "parameter_name": "pH",
+      "unit": "pH",
+      "wqi_standard": 8.5,
+      "co_variables": ["EC", "Turbidity"],
+      "lag_hours": [24, 48, 72],
+      "rolling_hours": [72, 168]
+    }
+  ]
+}

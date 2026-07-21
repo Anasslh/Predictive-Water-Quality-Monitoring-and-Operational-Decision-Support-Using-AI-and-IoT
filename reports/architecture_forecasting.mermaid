@@ -1,0 +1,55 @@
+---
+title: Multi-Step Recursive Forecasting Pipeline
+---
+flowchart TD
+    A([Dataset with timestamps\nc1_clean.csv]) --> B
+
+    subgraph FREQ["1 · Frequency Detection  frequency_detector.py"]
+        B["Sort by date\nDrop duplicates"] --> C
+        C["Compute consecutive\ntime differences"] --> D
+        D["Median Δt\nrobust to gaps"] --> E
+        E[/"frequency\n≈ 24 h for C-1"/]
+    end
+
+    subgraph STEPS["2 · Horizon → Step Count  compute_n_steps()"]
+        F[/"horizon_hours\n48 h or 72 h"/] --> G
+        E --> G
+        G["n_steps = ⌊horizon / freq⌋"] --> H
+        H[/"n_steps\n48 h → 2\n72 h → 3"/]
+    end
+
+    subgraph FEAT["3 · Feature Engineering  feature_fn injected"]
+        I["lag_hours → n_lag_rows\nrolling_hours → n_roll_rows\nvia frequency"] --> J
+        J["build_features_time_aware()\nor original build_features()\ninjected at construction"] --> K
+        K[/"Feature matrix X\nlag1, lag2, lag3\nroll3/7 mean+std\nco-variable lag1"/]
+    end
+
+    subgraph LOOP["4 · Recursive Forecast Loop  MultiStepForecaster.forecast()"]
+        L[/"historical_window\n raw df up to t"/] --> M
+        M["Append synthetic row\nat t+1 · placeholder target"] --> N
+        N["feature_fn extended window\nextract last row of X"] --> O
+        O["model.predict X_next"] --> P
+        P[/"predicted value ŷ_{t+k}"/]
+        P --> Q{"k < n_steps ?"}
+        Q -- "yes" --> R["Append ŷ to window\nas new last row\nco-variables held constant"]
+        R --> M
+        Q -- "no" --> S
+    end
+
+    subgraph OUT["5 · Output  ForecastResult"]
+        S[/"Trajectory\n[ŷ_{t+1}, ŷ_{t+2}, …, ŷ_{t+n}]"/]
+        T[/"Uncertainty bands\nσ_resid by step\nempirically computed\nover test set"/]
+    end
+
+    H --> L
+    K --> N
+    S --- T
+
+    style FREQ  fill:#f0f4fc,stroke:#2a78d6,stroke-width:1.5px
+    style STEPS fill:#f0f4fc,stroke:#2a78d6,stroke-width:1.5px
+    style FEAT  fill:#f5faf7,stroke:#1baf7a,stroke-width:1.5px
+    style LOOP  fill:#fff8ee,stroke:#eda100,stroke-width:1.5px
+    style OUT   fill:#fcfcfb,stroke:#898781,stroke-width:1.5px
+
+    classDef io fill:#fcfcfb,stroke:#c3c2b7,font-style:italic
+    class A,E,F,H,K,L,P,S,T io

@@ -1,0 +1,7 @@
+{
+  "model_path": "/mnt/c/Users/aanas/Downloads/NU internship/Predictive-Water-Quality-Monitoring-and-Operational-Decision-Support-Using-AI-and-IoT/models_store/ph/pH_xgb_ph_bench_d2_n50_lr001_20260721_120756.pkl",
+  "approval_id": "pH_xgb_ph_bench_d2_n50_lr001_20260721_100756_benchmark_freeze",
+  "promoted_at": "2026-07-21T10:07:56.180153+00:00",
+  "parameter_name": "pH",
+  "model_version": "xgb_ph_bench_d2_n50_lr001"
+}

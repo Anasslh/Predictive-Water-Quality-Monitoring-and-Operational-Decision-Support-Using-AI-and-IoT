@@ -1,0 +1,7 @@
+{
+  "model_path": "/mnt/c/Users/aanas/Downloads/NU internship/Predictive-Water-Quality-Monitoring-and-Operational-Decision-Support-Using-AI-and-IoT/models_store/ec/EC_xgb_ec_v1_final_20260719_151015.pkl",
+  "approval_id": "EC_xgb_ec_v1_final_20260719_131015_ba446e",
+  "promoted_at": "2026-07-19T13:10:16.049358+00:00",
+  "parameter_name": "EC",
+  "model_version": "xgb_ec_v1_final"
+}
