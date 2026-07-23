@@ -56,6 +56,7 @@ import numpy as np
 import pandas as pd
 
 from src.data.split import chronological_split
+from src.data.validation import validate_incoming_data
 from src.forecasting.feature_engineering_generic import build_features_time_aware
 from src.forecasting.frequency_detector import detect_frequency
 from src.pipeline.model_benchmark import (
@@ -74,6 +75,31 @@ from src.retraining.model_versioning import (
 )
 
 logger = logging.getLogger(__name__)
+
+# ── Minimum dataset size constants ─────────────────────────────────────────────
+#
+# MIN_ROWS_DATASET   — raw row count threshold checked at the entry of
+#   onboard_new_parameter(), before any computation.  At 100 rows and a
+#   70/15/15 split: train≈70, val≈15, test≈15 — the minimum we consider
+#   reliable enough to compute a meaningful RMSE.
+#
+# MIN_PARTITION_ROWS — safety net checked *after* feature engineering.
+#   Lag/rolling windows drop rows (e.g. rolling-7 drops 7 rows); on a
+#   borderline dataset this can push val or test below 10, making the
+#   RMSE estimate a single-digit sample.  Both val and test must reach
+#   this threshold before benchmarking begins.
+#
+#   Why 10 specifically: on EC (val=53, test=55 rows) bootstrap confidence
+#   intervals on RMSE were already wide enough to be flagged as a limitation
+#   in our own reports — those are 5× this threshold.  Below 10 rows the
+#   bootstrap variance explodes and model ranking becomes arbitrary; the
+#   number 10 is therefore a hard floor below which even an approximate
+#   metric loses meaning, not a target for reliable inference.  20+ rows
+#   per partition is recommended for any conclusion worth reporting.
+
+MIN_ROWS_DATASET   = 100   # minimum raw rows required at onboarding entry
+MIN_PARTITION_ROWS = 10    # absolute floor: val and test each need ≥ 10 rows
+
 
 # ── Return type for onboard_new_parameter ─────────────────────────────────────
 
@@ -217,6 +243,7 @@ def onboard_new_parameter(
     df: pd.DataFrame,
     parameter_name: str,
     models_store_path: str | Path | None = None,
+    grid_config: dict | None = None,
 ) -> OnboardingResult:
     """
     Run the full onboarding pipeline for a sensor parameter.
@@ -255,9 +282,49 @@ def onboard_new_parameter(
     sensor = get_sensor_entry(config, parameter_name)
     unit   = sensor.get("unit", "")
 
+    # ── Guard 1: minimum raw row count ────────────────────────────────────────
+    # Fail fast before any computation so the user gets a clear diagnostic
+    # instead of silent nonsense metrics on a 3-row test set.
+    n_raw = len(df)
+    if n_raw < MIN_ROWS_DATASET:
+        raise ValueError(
+            f"[{parameter_name}] Dataset too small for reliable onboarding: "
+            f"{n_raw} row(s) provided, {MIN_ROWS_DATASET} required.\n"
+            f"\n"
+            f"  Projected split at 70 / 15 / 15 on {n_raw} rows:\n"
+            f"    train ≈ {int(n_raw * 0.70):>4} rows\n"
+            f"    val   ≈ {int(n_raw * 0.15):>4} rows  ← RMSE unreliable below "
+            f"{MIN_PARTITION_ROWS} rows\n"
+            f"    test  ≈ {int(n_raw * 0.15):>4} rows  ← RMSE unreliable below "
+            f"{MIN_PARTITION_ROWS} rows\n"
+            f"\n"
+            f"  Collect at least {MIN_ROWS_DATASET} measurements before onboarding.\n"
+            f"  (At {MIN_ROWS_DATASET} rows: train≈70, val≈15, test≈15 — "
+            f"the accepted minimum.)"
+        )
+
     logger.info("=" * 62)
     logger.info("  ONBOARDING PIPELINE — %s  (%s)", parameter_name, unit)
     logger.info("=" * 62)
+
+    # ── Data validation ────────────────────────────────────────────────────
+    # Reject rows with out-of-bounds sensor values BEFORE feature engineering.
+    # Operates on raw sensor data against physical_bounds in system_config.json.
+    val_report = validate_incoming_data(df, sensor_config=config)
+    if not val_report.is_clean:
+        logger.warning(
+            "[orchestrator] [%s] Validation rejected %d/%d row(s) before pipeline:\n%s",
+            parameter_name,
+            val_report.n_rejected,
+            val_report.n_input,
+            val_report.summary(),
+        )
+    else:
+        logger.info(
+            "[orchestrator] [%s] Validation passed: all %d rows within bounds.",
+            parameter_name, val_report.n_input,
+        )
+    df = val_report.valid_df
 
     df, frequency = _prepare_data(config, df.copy(), sensor)
 
@@ -273,6 +340,26 @@ def onboard_new_parameter(
         df, sensor, frequency
     )
 
+    # ── Guard 2: post-FE partition sizes ──────────────────────────────────────
+    # Lag/rolling windows drop rows (rolling-7 drops 7 rows on daily data).
+    # A dataset that barely cleared Guard 1 may still produce val/test sets
+    # too small for a meaningful RMSE after this NaN drop.
+    n_fe   = len(X_train) + len(X_val) + len(X_test)
+    n_val  = len(X_val)
+    n_test = len(X_test)
+    if min(n_val, n_test) < MIN_PARTITION_ROWS:
+        raise ValueError(
+            f"[{parameter_name}] Feature-engineered dataset too small after NaN drop: "
+            f"{n_fe} rows (from {n_raw} raw rows).\n"
+            f"  train={len(X_train)}, val={n_val}, test={n_test} — "
+            f"val and test each need ≥ {MIN_PARTITION_ROWS} rows.\n"
+            f"\n"
+            f"  Likely cause: lag/rolling windows are large relative to the dataset.\n"
+            f"  Options:\n"
+            f"    1. Collect more data (recommend ≥ {MIN_ROWS_DATASET} raw rows).\n"
+            f"    2. Reduce rolling_hours in sensors_config.json for this parameter."
+        )
+
     logger.info("[orchestrator] [%s] Running RAW benchmark ...", parameter_name)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -280,6 +367,7 @@ def onboard_new_parameter(
             X_train, y_train, X_val, y_val,
             parameter_name=parameter_name,
             unit=unit,
+            grid_config=grid_config,
         )
 
     logger.info("\n%s", format_benchmark_report(report_raw))
@@ -314,6 +402,7 @@ def onboard_new_parameter(
                 Xtr_l, ytr_l, Xv_l, yv_l,
                 parameter_name=col_log,
                 unit=f"log-{unit}",
+                grid_config=grid_config,
             )
 
         report_log = rerank_log_report_to_original_scale(

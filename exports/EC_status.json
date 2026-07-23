@@ -1,0 +1,16 @@
+{
+  "parameter_name": "EC",
+  "unit": "µS/cm",
+  "model_version": null,
+  "last_promoted_at": null,
+  "last_measurement_at": "2026-07-23T16:23:16.190576+00:00",
+  "performance_30d": {
+    "skill_vs_persistence_pct": 26.72,
+    "rmse": 425.638,
+    "mae": 311.7738,
+    "n_measurements": 16
+  },
+  "pending_approvals": 0,
+  "consecutive_rejections": 0,
+  "queried_at": "2026-07-23T16:23:16.245684+00:00"
+}

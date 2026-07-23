@@ -1,0 +1,4 @@
+2026-07-21 23:40:27  WARNING   test  Logging is wired up correctly
+2026-07-23 18:16:17  WARNING   src.data.validation  validate_incoming_data: missing expected columns ['Temperature']
+2026-07-23 18:16:21  WARNING   src.data.validation  validate_incoming_data: missing expected columns ['Temperature']
+2026-07-23 18:16:21  WARNING   src.forecasting.frequency_detector  detect_frequency: 1 duplicate timestamp(s) removed before frequency computation

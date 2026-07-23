@@ -162,64 +162,6 @@ class MultiStepForecaster:
             n_steps         = n_steps,
         )
 
-    # ── Utility: compute per-step residual std ─────────────────────────────────
-
-    def compute_residual_std_by_step(
-        self,
-        full_df: pd.DataFrame,
-        starting_indices: list[int],
-        n_steps: int,
-    ) -> list[float]:
-        """
-        Estimate empirical uncertainty at each forecast step.
-
-        For each starting index i (a row index within full_df), run a recursive
-        n-step forecast using everything BEFORE row i as the historical window,
-        and record the residual (true_value - predicted_value) at each step.
-
-        Returns the per-step standard deviation of these residuals.
-
-        Parameters
-        ----------
-        full_df          : Complete dataset (must include all rows needed as
-                           both history and true values).
-        starting_indices : List of row indices (within full_df) where each
-                           forecast begins. The forecast at index i uses
-                           full_df[:i] as history and full_df[i:i+n_steps]
-                           as ground truth.
-        n_steps          : Forecast horizon (number of steps).
-
-        Returns
-        -------
-        list[float]  — length = n_steps, residual std at step 1, 2, …, n_steps.
-        """
-        residuals_by_step: list[list[float]] = [[] for _ in range(n_steps)]
-
-        for i in starting_indices:
-            if i + n_steps > len(full_df):
-                continue
-
-            history     = full_df.iloc[:i].copy()
-            true_values = full_df[self.target].iloc[i: i + n_steps].values
-
-            # Temporarily remove residual_std to avoid recursion in sub-calls
-            saved = self.residual_std_by_step
-            self.residual_std_by_step = []
-            try:
-                result = self.forecast(history, n_steps)
-            finally:
-                self.residual_std_by_step = saved
-
-            for step, (true_val, pred_val) in enumerate(
-                zip(true_values, result.predictions)
-            ):
-                residuals_by_step[step].append(float(true_val) - pred_val)
-
-        return [
-            float(np.std(r, ddof=1)) if len(r) > 1 else np.nan
-            for r in residuals_by_step
-        ]
-
     # ── Private helpers ────────────────────────────────────────────────────────
 
     def _get_next_step_features(self, window: pd.DataFrame) -> pd.DataFrame:
@@ -247,3 +189,90 @@ class MultiStepForecaster:
             X, _ = self.feature_fn(extended)
 
         return X.iloc[[-1]].reset_index(drop=True)
+
+
+# ── Persistence helpers ────────────────────────────────────────────────────────
+
+_FORECASTER_CONFIG_FILENAME = "forecaster_config.json"
+
+
+def save_forecaster_config(
+    target: str,
+    frequency: timedelta,
+    lag_hours: list[int],
+    rolling_hours: list[int],
+    co_variables: list[str],
+    residual_std_by_step: list[float],
+    models_store_path: "str | Path",
+    n_steps: int = 7,
+) -> "Path":
+    """
+    Persist the forecaster configuration to <models_store_path>/forecaster_config.json.
+
+    The model itself is not stored here (it lives in current_model.json).
+    This file only stores the feature engineering parameters and uncertainty bands
+    needed to reconstruct a MultiStepForecaster at load time.
+    """
+    import json
+    from pathlib import Path as _Path
+
+    out = _Path(models_store_path) / _FORECASTER_CONFIG_FILENAME
+    cfg = {
+        "target":                target,
+        "frequency_seconds":     int(frequency.total_seconds()),
+        "lag_hours":             lag_hours,
+        "rolling_hours":         rolling_hours,
+        "co_variables":          co_variables,
+        "residual_std_by_step":  [round(s, 6) for s in residual_std_by_step],
+        "n_steps":               n_steps,
+    }
+    out.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    return out
+
+
+def load_forecaster(
+    models_store_path: "str | Path",
+    prediction_model: "ParameterModel",
+) -> "MultiStepForecaster | None":
+    """
+    Reconstruct a MultiStepForecaster from the saved config and a fitted model.
+
+    Returns None if forecaster_config.json does not exist (forecaster not yet
+    trained for this parameter — caller should log and skip forecasting).
+    """
+    import json
+    from pathlib import Path as _Path
+    from src.forecasting.feature_engineering_generic import build_features_time_aware
+
+    p = _Path(models_store_path) / _FORECASTER_CONFIG_FILENAME
+    if not p.exists():
+        return None
+
+    raw           = json.loads(p.read_text(encoding="utf-8"))
+    target        = raw["target"]
+    frequency     = timedelta(seconds=raw["frequency_seconds"])
+    lag_hours     = raw["lag_hours"]
+    rolling_hours = raw["rolling_hours"]
+    co_variables  = raw.get("co_variables", [])
+    residual_std  = raw.get("residual_std_by_step", [])
+
+    def _feature_fn(df: pd.DataFrame) -> "tuple[pd.DataFrame, pd.Series]":
+        return build_features_time_aware(
+            df,
+            target        = target,
+            frequency     = frequency,
+            lag_hours     = lag_hours,
+            rolling_hours = rolling_hours,
+            co_variables  = co_variables if co_variables else None,
+        )
+
+    forecaster = MultiStepForecaster(
+        model                = prediction_model,
+        target               = target,
+        feature_fn           = _feature_fn,
+        frequency            = frequency,
+        residual_std_by_step = residual_std,
+    )
+    # Expose the saved n_steps so callers can pass it as forecast_steps
+    forecaster._config_n_steps: int = raw.get("n_steps", 7)
+    return forecaster

@@ -37,6 +37,8 @@ The current serving model is never touched by any function in this module.
 from __future__ import annotations
 
 import json
+import logging
+import os
 import pickle
 import uuid
 from dataclasses import dataclass, asdict
@@ -50,6 +52,7 @@ from src.retraining.model_versioning import (
     write_current_model_pointer,
 )
 
+logger = logging.getLogger(__name__)
 
 # Directory name created inside models_store_path by the manager.
 APPROVAL_DIR_NAME = "pending_approvals"
@@ -361,8 +364,11 @@ def list_pending_approvals(pending_dir: str | Path) -> list[PendingApproval]:
             a = _load_approval_json(json_path)
             if a.status == "pending_approval":
                 approvals.append(a)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "list_pending_approvals: skipping malformed approval file '%s': %s",
+                json_path, exc,
+            )
 
     return sorted(approvals, key=lambda a: a.timestamp_created)
 
@@ -450,9 +456,14 @@ def format_report(approval: PendingApproval) -> str:
 # ── Private helpers ────────────────────────────────────────────────────────────
 
 def _save_approval_json(approval: PendingApproval, pending_dir: Path) -> None:
+    # Atomic write (crash-safety, not concurrency): write to .tmp then os.replace().
+    # A crash during json.dump leaves the .tmp incomplete; the previous .json is
+    # untouched. See model_versioning._atomic_write_json for the full rationale.
     json_path = pending_dir / f"{approval.approval_id}.json"
-    with open(json_path, "w", encoding="utf-8") as f:
+    tmp_path  = json_path.with_suffix(".json.tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(asdict(approval), f, indent=2, ensure_ascii=False)
+    os.replace(tmp_path, json_path)
 
 
 def _load_approval_json(json_path: Path) -> PendingApproval:

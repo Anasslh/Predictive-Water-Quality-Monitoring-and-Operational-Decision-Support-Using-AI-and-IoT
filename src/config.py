@@ -77,6 +77,12 @@ class LoggingConfig:
 
 
 @dataclass
+class ExportsConfig:
+    exports_dir:    str = "exports"
+    retention_days: int = 30
+
+
+@dataclass
 class SystemConfig:
     """
     Top-level configuration object. Instantiated once by get_config().
@@ -87,15 +93,13 @@ class SystemConfig:
         forecasting — recursive horizon defaults
         validation  — physical plausibility bounds
         logging     — console + file log settings
-        sensors_raw — the raw "sensors" section dict (use pipeline/orchestrator
-                      helpers to access individual sensor entries)
     """
     retraining:  RetrainingConfig  = field(default_factory=RetrainingConfig)
     anomaly:     AnomalyConfig     = field(default_factory=AnomalyConfig)
     forecasting: ForecastingConfig = field(default_factory=ForecastingConfig)
     validation:  ValidationConfig  = field(default_factory=ValidationConfig)
     logging:     LoggingConfig     = field(default_factory=LoggingConfig)
-    sensors_raw: dict              = field(default_factory=dict)
+    exports:     ExportsConfig     = field(default_factory=ExportsConfig)
 
 
 # ── Loader ─────────────────────────────────────────────────────────────────────
@@ -143,7 +147,10 @@ def _parse_config(raw: dict) -> SystemConfig:
             format        = lo.get("format",        "%(asctime)s  %(levelname)-8s  %(name)s  %(message)s"),
             date_format   = lo.get("date_format",   "%Y-%m-%d %H:%M:%S"),
         ),
-        sensors_raw = raw.get("sensors", {}),
+        exports=ExportsConfig(
+            exports_dir    = raw.get("exports", {}).get("exports_dir",    "exports"),
+            retention_days = int(raw.get("exports", {}).get("retention_days", 30)),
+        ),
     )
 
 
@@ -178,7 +185,10 @@ def get_config(config_path: str | Path | None = None) -> SystemConfig:
 
 
 def reload_config() -> SystemConfig:
-    """Force-reload from disk (useful after editing system_config.json at runtime)."""
+    """Force-reload from disk (useful after editing system_config.json at runtime).
+
+    Utility function for tests and manual reload — not called in production flow.
+    """
     global _SINGLETON
     _SINGLETON = None
     return get_config()

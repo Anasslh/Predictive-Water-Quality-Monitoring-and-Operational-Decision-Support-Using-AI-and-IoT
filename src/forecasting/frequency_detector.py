@@ -13,10 +13,13 @@ Example
     n    = compute_n_steps(72, freq)     # 3
 """
 
+import logging
 import math
 from datetime import timedelta
 
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 def detect_frequency(df: pd.DataFrame, date_col: str = "Date") -> timedelta:
@@ -48,7 +51,14 @@ def detect_frequency(df: pd.DataFrame, date_col: str = "Date") -> timedelta:
     if date_col not in df.columns:
         raise ValueError(f"Column '{date_col}' not found in DataFrame.")
 
-    dates = pd.to_datetime(df[date_col]).drop_duplicates().sort_values().reset_index(drop=True)
+    raw_dates = pd.to_datetime(df[date_col])
+    dates = raw_dates.drop_duplicates().sort_values().reset_index(drop=True)
+    n_dup = len(raw_dates) - len(dates)
+    if n_dup > 0:
+        logger.warning(
+            "detect_frequency: %d duplicate timestamp(s) removed before frequency computation",
+            n_dup,
+        )
 
     if len(dates) < 2:
         raise ValueError(

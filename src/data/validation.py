@@ -143,8 +143,22 @@ def validate_incoming_data(
         )
 
     # ── 3. Physical-bounds check ───────────────────────────────────────────────
+    # Build the set of declared sensor columns so we can distinguish "no bounds
+    # defined for a known sensor" (warn) from "non-sensor column" (silent skip).
+    sensor_cols: set[str] = set()
+    if sensor_config is not None:
+        sensor_cols = {s["column_name"] for s in sensor_config.get("sensors", [])}
+
     for col in df.columns:
         if col not in bounds_cfg:
+            if col in sensor_cols:
+                msg = (
+                    f"no physical bounds defined for '{col}' in "
+                    "system_config.json → validation.physical_bounds "
+                    "— skipping range validation for this parameter"
+                )
+                warnings.append(msg)
+                logger.warning("validate_incoming_data: %s", msg)
             continue
         bound = bounds_cfg[col]
         try:

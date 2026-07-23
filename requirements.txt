@@ -1,10 +1,20 @@
-pandas
-numpy
-scikit-learn
-xgboost
-shap
-statsmodels
-matplotlib
-joblib
-pyyaml
-pytest
+# Core scientific stack
+numpy>=1.26,<3          # 2.3.5 installed
+pandas>=2.0,<4          # 3.0.2 installed
+scipy>=1.11             # 1.17.1 installed — erfc, ks_2samp
+
+# Machine learning
+scikit-learn>=1.4       # 1.8.0 installed — RF, SVR, IsolationForest, Pipeline
+xgboost>=2.0            # 3.3.0 installed — XGBRegressor
+
+# Explainability
+shap>=0.44              # 0.52.0 installed — SHAP feature importance
+
+# Hyperparameter optimisation (Bayesian tuning scripts)
+optuna>=3.0             # 4.9.0 installed
+
+# Visualisation
+matplotlib>=3.7         # 3.10.9 installed
+
+# Testing
+pytest>=7.0             # discovery and runner used by run_tests.sh

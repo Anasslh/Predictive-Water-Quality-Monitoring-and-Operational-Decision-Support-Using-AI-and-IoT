@@ -22,9 +22,38 @@ ROLLBACK
 To roll back to a previous version, call load_specific_version() with the
 timestamp string (YYYYMMDD_HHMMSS) of the desired checkpoint. All available
 timestamps can be listed with list_versions().
+
+CRASH SAFETY
+------------
+All JSON writes in this module use the write-to-.tmp + os.replace() pattern
+(see _atomic_write_json). This guarantees that a process crash, power loss, or
+exception during json.dump leaves the previous file intact rather than a
+partially-written or empty file. os.replace() is an atomic rename on POSIX
+filesystems: the destination either has the old content or the new content —
+it can never have partial content from the new write.
+
+CONCURRENCY LIMITATION — assumed out-of-scope, documented explicitly
+--------------------------------------------------------------------
+No file locking (fcntl.flock, portalocker, etc.) is implemented. This is
+intentional and appropriate for the current deployment model:
+  - Single process per station.
+  - Single writer (one ParameterMonitor + one RetrainManager) per models_store.
+  - No concurrent processes share the same models_store path.
+
+In a multi-process scenario (e.g. two monitoring processes for the same station
+running in parallel, or a web server with multiple worker processes), concurrent
+writes could race even with os.replace() — the last writer wins, silently
+discarding the other's update. For that context, add cross-process locking:
+  POSIX:          fcntl.flock(fd, fcntl.LOCK_EX)
+  Cross-platform: portalocker library (pip install portalocker)
+
+The cost of not implementing this now is zero, because the deployment is
+single-process. Do NOT add locking speculatively — it adds complexity and
+a new failure mode (deadlock on crash) without benefit in the current context.
 """
 
 import json
+import os
 import pickle
 import warnings
 from datetime import datetime, timezone
@@ -208,8 +237,7 @@ def write_current_model_pointer(
         "model_version":  model_version,
     }
     pointer_path = store / CURRENT_MODEL_FILENAME
-    with open(pointer_path, "w", encoding="utf-8") as f:
-        json.dump(pointer, f, indent=2)
+    _atomic_write_json(pointer_path, pointer, indent=2)
     return pointer_path
 
 
@@ -279,6 +307,35 @@ def read_current_model_pointer(models_store_path: str | Path) -> dict | None:
 
 
 # ── Private helpers ────────────────────────────────────────────────────────────
+
+def _atomic_write_json(path: Path, data: dict, **dump_kwargs) -> None:
+    """
+    Write *data* as JSON to *path* atomically via a .tmp sibling file.
+
+    CRASH SAFETY (the purpose of this function)
+    -------------------------------------------
+    Writing JSON directly to the target file is not safe: if the process is
+    killed between open() and close(), the file is left empty or half-written.
+    The next startup then fails to parse it, losing the pointer/counter state.
+
+    This function writes to a sibling .tmp file first. If json.dump raises
+    (disk-full, OOM, SIGKILL between open and close), the .tmp is incomplete
+    but *path* still has its previous valid content. os.replace() is called
+    only after the write is complete and the file handle is closed — at that
+    point, the rename is atomic on POSIX (the kernel swaps inode references
+    without a window where *path* is missing or partial).
+
+    NOT A CONCURRENCY LOCK
+    ----------------------
+    This function does not protect against two processes writing to the same
+    path simultaneously. See the module-level docstring (CONCURRENCY LIMITATION)
+    for the rationale and the remedy if multi-process deployment is ever needed.
+    """
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, **dump_kwargs)
+    os.replace(tmp, path)
+
 
 def _list_version_paths(
     models_store_path: str | Path,
@@ -354,8 +411,7 @@ def write_rejection_counter(
         "updated_at":             datetime.now(timezone.utc).isoformat(),
     }
     path = store / REJECTION_COUNTER_FILENAME
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
+    _atomic_write_json(path, payload, indent=2)
     return path
 
 

@@ -37,16 +37,13 @@ src/data/feature_engineering.py, because:
     72/24=3, 168/24=7           → roll3_mean/std, roll7_mean/std
 """
 
+import logging
 import math
 from datetime import timedelta
 
 import pandas as pd
 
-_COVARIATES: dict[str, list[str]] = {
-    "EC":        ["pH", "Turbidity"],
-    "pH":        ["EC", "Turbidity"],
-    "Turbidity": ["pH", "EC"],
-}
+logger = logging.getLogger(__name__)
 
 
 def build_features_time_aware(
@@ -72,6 +69,11 @@ def build_features_time_aware(
     rolling_hours: Rolling window durations in hours. Default [72, 168].
                    72 h / 24 h/day = 3 rows (daily), 72 h / 1 h = 72 rows (hourly).
     diff         : If True, predict first difference instead of raw value.
+    co_variables : List of co-variable column names to add as lag-1 features.
+                   Pass None (or omit) only when no co-variables are declared
+                   in sensors_config.json; a warning is logged and cross-
+                   parameter features are skipped. Pass [] explicitly to
+                   silence the warning and skip them intentionally.
 
     Returns
     -------
@@ -111,9 +113,15 @@ def build_features_time_aware(
         )
 
     # Cross-variable lag-1 features (always 1 step = 1 measurement interval).
-    # co_variables=None → built-in lookup; co_variables=[] → skip entirely.
+    # co_variables must be passed by the caller (from sensors_config.json).
+    # None means no co_variables were declared for this parameter in config.
     if co_variables is None:
-        co_variables = _COVARIATES.get(target, [])
+        logger.warning(
+            "no co_variables defined for '%s' in sensors_config.json"
+            " — proceeding without cross-parameter features",
+            target,
+        )
+        co_variables = []
     for col in co_variables:
         if col in df.columns:
             feat[f"{col}_lag1"] = df[col].shift(1)

@@ -97,6 +97,7 @@ class RetrainManager:
     MIN_NEW_ROWS_DEFAULT: int = 60
     TOLERANCE_DEFAULT: float = 0.02
     REJECTION_ALERT_THRESHOLD_DEFAULT: int = 3
+    RMSE_RATIO_THRESHOLD_DEFAULT: float = 1.10
 
     # ── Sliding-window cap on training history ────────────────────────────────
     #
@@ -141,6 +142,7 @@ class RetrainManager:
         models_store_path: str | Path | None = None,
         rejection_alert_threshold: int = REJECTION_ALERT_THRESHOLD_DEFAULT,
         max_history_years: float = MAX_HISTORY_YEARS_DEFAULT,
+        rmse_ratio_threshold: float = RMSE_RATIO_THRESHOLD_DEFAULT,
         date_col: str | None = None,
     ) -> None:
         self.model_class      = model_class
@@ -148,6 +150,7 @@ class RetrainManager:
         self.min_new_rows     = min_new_rows
         self.tolerance        = tolerance
         self.rejection_alert_threshold = rejection_alert_threshold
+        self.rmse_ratio_threshold = rmse_ratio_threshold
         # Root of the model store (versioned production files + pending_approvals/).
         # Defaults to models_store/ relative to the working directory.
         self._models_store_path = (
@@ -287,7 +290,11 @@ class RetrainManager:
         recent_preds     = self.current_model.predict(X_recent)
         recent_residuals = y_recent.values - recent_preds
 
-        drift_result = check_drift(self.reference_residuals, recent_residuals)
+        drift_result = check_drift(
+            self.reference_residuals,
+            recent_residuals,
+            rmse_ratio_threshold=self.rmse_ratio_threshold,
+        )
 
         if not drift_result["drift_detected"]:
             return {

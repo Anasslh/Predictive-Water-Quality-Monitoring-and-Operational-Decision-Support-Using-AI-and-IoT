@@ -114,37 +114,3 @@ def explain_anomaly(
     )
 
 
-def batch_explain(
-    model: ParameterModel,
-    detector: ECAnomalyDetector,
-    X: pd.DataFrame,
-    y_actual: pd.Series | np.ndarray,
-    timestamps: list[str],
-    top_k: int = 3,
-    anomalies_only: bool = False,
-) -> List[AnomalyExplanation]:
-    """
-    Run explain_anomaly() over an entire dataset and return a list of results.
-
-    Parameters
-    ----------
-    anomalies_only : if True, return only rows where is_anomaly=True.
-                     Useful for production alerting where only flagged rows
-                     need a full SHAP explanation.
-    """
-    results = []
-    y_arr = np.asarray(y_actual, dtype=float)
-
-    for i, ts in enumerate(timestamps):
-        result = explain_anomaly(
-            model     = model,
-            detector  = detector,
-            X_row     = X.iloc[[i]],
-            y_actual  = float(y_arr[i]),
-            timestamp = ts,
-            top_k     = top_k,
-        )
-        if not anomalies_only or result.is_anomaly:
-            results.append(result)
-
-    return results

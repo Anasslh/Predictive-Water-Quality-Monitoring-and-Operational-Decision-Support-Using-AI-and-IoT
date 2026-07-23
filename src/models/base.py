@@ -77,14 +77,3 @@ class ParameterModel(ABC):
             raise RuntimeError(
                 f"Model for {self.parameter_name} has not been trained yet (call fit() first)."
             )
-
-    def to_prediction(self, timestamp: str, X_row: pd.DataFrame) -> Prediction:
-        """Shared utility: produce a standardized Prediction for a single row."""
-        self.check_fitted()
-        value = float(self.predict(X_row)[0])
-        return Prediction(
-            parameter=self.parameter_name,
-            timestamp=timestamp,
-            predicted_value=value,
-            model_version=self.model_version,
-        )

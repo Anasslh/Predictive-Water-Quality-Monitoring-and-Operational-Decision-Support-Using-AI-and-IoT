@@ -183,9 +183,10 @@ def benchmark_models(
     y_val:          pd.Series,
     parameter_name: str,
     unit:           str = "",
+    grid_config:    dict | None = None,
 ) -> BenchmarkReport:
     """
-    Train and evaluate RF / XGBoost / SVR over a restricted hyperparameter grid.
+    Train and evaluate RF / XGBoost / SVR over a configurable hyperparameter grid.
 
     All models are evaluated on the provided validation set. The grid is
     intentionally restricted to keep runtime below 60 s for datasets of the
@@ -198,6 +199,12 @@ def benchmark_models(
                        NOT used for final test evaluation.
     parameter_name   : Sensor parameter name (used for model versioning).
     unit             : Physical unit string for display (e.g. "µS/cm").
+    grid_config      : Optional dict with keys "rf_grid", "xgboost_grid",
+                       "svr_grid" (same structure as the "model_benchmark"
+                       section of system_config.json). When None or a key is
+                       missing, the hardcoded defaults below are used — this
+                       guarantees backwards-compatibility for any caller that
+                       does not pass the argument.
 
     Returns
     -------
@@ -208,9 +215,22 @@ def benchmark_models(
     param_lower = parameter_name.lower()
     candidates: list[tuple[str, ParameterModel]] = []
 
+    # ── Read grid values from config, with hardcoded fallbacks ────────────────
+    _rf  = (grid_config or {}).get("rf_grid",      {})
+    _xgb = (grid_config or {}).get("xgboost_grid", {})
+    _svr = (grid_config or {}).get("svr_grid",     {})
+
+    rf_n_estimators  = _rf.get("n_estimators",    [50, 100, 200])
+    rf_max_depth     = _rf.get("max_depth",        [3, 5, None])
+    xgb_max_depth    = _xgb.get("max_depth",       [2, 3, 5])
+    xgb_n_estimators = _xgb.get("n_estimators",   [50, 100])
+    xgb_learning_rate= _xgb.get("learning_rate",  [0.01, 0.05, 0.1])
+    svr_C            = _svr.get("C",              [1, 10, 100])
+    svr_epsilon      = _svr.get("epsilon",        [0.1, 1.0])
+
     # ── RF grid ───────────────────────────────────────────────────────────────
-    for n_est in [50, 100, 200]:
-        for depth in [3, 5, None]:
+    for n_est in rf_n_estimators:
+        for depth in rf_max_depth:
             depth_tag = str(depth) if depth is not None else "full"
             label = f"RF         n={n_est:<3}  depth={depth_tag}"
             mv    = f"rf_{param_lower}_bench_d{depth_tag}_n{n_est}"
@@ -219,9 +239,9 @@ def benchmark_models(
             candidates.append((label, model, {"n_estimators": n_est, "max_depth": depth}))
 
     # ── XGBoost grid ──────────────────────────────────────────────────────────
-    for depth in [2, 3, 5]:
-        for n_est in [50, 100]:
-            for lr in [0.01, 0.05, 0.1]:
+    for depth in xgb_max_depth:
+        for n_est in xgb_n_estimators:
+            for lr in xgb_learning_rate:
                 label = f"XGBoost    depth={depth}  lr={lr}   n={n_est}"
                 mv    = f"xgb_{param_lower}_bench_d{depth}_n{n_est}_lr{str(lr).replace('.','')}"
                 model = _GenericXGBoostModel(
@@ -231,8 +251,8 @@ def benchmark_models(
                 candidates.append((label, model, {"max_depth": depth, "n_estimators": n_est, "learning_rate": lr}))
 
     # ── SVR grid ──────────────────────────────────────────────────────────────
-    for C in [1, 10, 100]:
-        for eps in [0.1, 1.0]:
+    for C in svr_C:
+        for eps in svr_epsilon:
             label = f"SVR        C={C:<5}  eps={eps}"
             mv    = f"svr_{param_lower}_bench_C{C}_eps{str(eps).replace('.','')}"
             model = _GenericSVRModel(parameter_name, mv, C=C, epsilon=eps)

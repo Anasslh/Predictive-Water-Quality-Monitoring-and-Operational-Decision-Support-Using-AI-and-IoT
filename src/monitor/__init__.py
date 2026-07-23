@@ -1,11 +1,16 @@
 """
-monitor.py — Single-parameter operational monitor for the water-quality pipeline.
+monitor/__init__.py — Single-parameter operational monitor for the water-quality pipeline.
 
 Architecture
 ------------
 ParameterMonitor wraps all four pipeline stages for one sensor parameter
 (predict → anomaly check → retrain check → forecast) and exposes a single
 entry-point: process_new_measurement(new_row).
+
+After each successful call to process_new_measurement(), the result is
+automatically appended to a rolling JSONL export file via
+src.monitor.export.append_measurement().  Export path and retention window
+are read from system_config.json (section "exports").
 
 Design constraints
 ------------------
@@ -45,14 +50,24 @@ import pandas as pd
 
 from src.config import get_config, SystemConfig
 from src.models.base import ParameterModel
+from src.pipeline.orchestrator import load_sensor_config, get_sensor_entry
 from src.anomaly.detector import ECAnomalyDetector
 from src.anomaly.residual import compute_residuals
 from src.forecasting.recursive_forecaster import MultiStepForecaster, ForecastResult
 from src.retraining.retrain_manager import RetrainManager
 from src.retraining.model_versioning import read_current_model_pointer, read_rejection_counter
 from src.xai.shap_wrapper import compute_shap_explanation
+from src.data.validation import validate_incoming_data as _validate_incoming_data
+from src.monitor.export import (
+    append_measurement     as _append_measurement,
+    write_status_export    as _write_status_export,
+    get_dashboard_export_paths,
+)
 
 logger = logging.getLogger(__name__)
+
+# Default path for sensors_config.json — same as run.py's _DEFAULT_SENSORS_CONFIG
+_DEFAULT_SENSORS_CONFIG = Path(__file__).resolve().parents[2] / "config" / "sensors_config.json"
 
 
 # ── Result dataclasses ─────────────────────────────────────────────────────────
@@ -149,9 +164,10 @@ class ParameterMonitor:
         retrain_manager:  RetrainManager | None       = None,
         anomaly_detector: ECAnomalyDetector | None    = None,
         forecaster:       MultiStepForecaster | None  = None,
-        models_store_path: str | Path | None          = None,
-        config:           SystemConfig | None         = None,
-        top_k_shap:       int                         = 3,
+        models_store_path:   str | Path | None          = None,
+        config:              SystemConfig | None         = None,
+        top_k_shap:          int                         = 3,
+        sensors_config_path: str | Path | None           = None,
     ) -> None:
         self.parameter_name    = parameter_name
         self.prediction_model  = prediction_model
@@ -162,6 +178,24 @@ class ParameterMonitor:
         self.models_store_path = Path(models_store_path) if models_store_path else None
         self.cfg               = config or get_config()
         self.top_k_shap        = top_k_shap
+
+        # Physical unit — read directly from sensors_config.json (single source of truth)
+        _sc_path = Path(sensors_config_path) if sensors_config_path else _DEFAULT_SENSORS_CONFIG
+        self._unit: str = ""
+        if _sc_path.exists():
+            try:
+                _sc = load_sensor_config(_sc_path)
+                self._unit = get_sensor_entry(_sc, self.parameter_name).get("unit", "")
+            except ValueError:
+                logger.warning(
+                    "[%s] not found in %s — unit will be empty in status export",
+                    parameter_name, _sc_path,
+                )
+        else:
+            logger.warning(
+                "[%s] sensors_config.json not found at %s — unit will be empty in status export",
+                parameter_name, _sc_path,
+            )
 
         # Rolling state updated after each measurement
         self._last_prediction:       float | None = None
@@ -185,6 +219,7 @@ class ParameterMonitor:
         all_data: pd.DataFrame | None = None,
         actual_value: float | None    = None,
         forecast_steps: int | None    = None,
+        timestamp: Any | None         = None,
     ) -> MonitorResult:
         """
         Run the full pipeline for one new sensor row.
@@ -202,6 +237,12 @@ class ParameterMonitor:
         forecast_steps : Number of future steps to forecast. If None, uses
                          cfg.forecasting.default_horizon_hours / step duration.
                          Ignored if forecaster is None.
+        timestamp      : Explicit measurement timestamp to store in the result and
+                         the JSONL export. When provided, overrides any Date/
+                         timestamp column detected in new_row (which may be absent
+                         when new_row contains pre-computed features rather than
+                         raw sensor values). Pass the value extracted from the
+                         original raw row before feature engineering.
 
         Returns
         -------
@@ -209,11 +250,34 @@ class ParameterMonitor:
         """
         result = MonitorResult(parameter_name=self.parameter_name)
 
+        # ── Stage 0: Input validation ─────────────────────────────────────────
+        # Check physical bounds before any computation. new_row is already
+        # feature-engineered, so column-presence checking is skipped (no
+        # sensor_config passed). Physical bounds apply to any column whose
+        # name matches system_config.json validation.physical_bounds.
+        val_report = _validate_incoming_data(new_row)
+        if not val_report.is_clean:
+            reasons = "; ".join(
+                f"row {r.index}: {', '.join(r.reasons)}"
+                for r in val_report.rejected_rows
+            )
+            logger.warning(
+                "[%s] Measurement row rejected by Stage 0 validation — skipping pipeline: %s",
+                self.parameter_name, reasons,
+            )
+            return result
+
         # ── Timestamp ─────────────────────────────────────────────────────────
+        # First try to detect a date column in new_row (works when new_row is a
+        # raw sensor row). Then let an explicit `timestamp` argument override —
+        # this is the correct path when new_row contains pre-computed features
+        # and the Date column has been dropped by feature engineering.
         for tc in ("Date", "timestamp", "date", "Time"):
             if tc in new_row.columns:
                 result.timestamp = new_row[tc].iloc[0]
                 break
+        if timestamp is not None:
+            result.timestamp = timestamp
 
         # ── Stage 1: Prediction + SHAP ────────────────────────────────────────
         try:
@@ -299,6 +363,31 @@ class ParameterMonitor:
             except Exception as exc:
                 logger.error("[%s] Forecast failed: %s", self.parameter_name, exc)
 
+        # ── Stage 5: Rolling JSONL export ─────────────────────────────────────
+        try:
+            _append_measurement(
+                self.parameter_name,
+                result,
+                exports_dir    = self.cfg.exports.exports_dir,
+                retention_days = self.cfg.exports.retention_days,
+            )
+        except Exception as exc:
+            logger.warning("[%s] Export write failed (non-fatal): %s", self.parameter_name, exc)
+
+        # ── Stage 6: Status JSON (overwritten after every measurement) ─────────
+        try:
+            _write_status_export(
+                self.parameter_name,
+                unit              = self._unit,
+                models_store_path = self.models_store_path,
+                exports_dir       = self.cfg.exports.exports_dir,
+                retention_days    = self.cfg.exports.retention_days,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[%s] Status export write failed (non-fatal): %s", self.parameter_name, exc
+            )
+
         return result
 
     # ── System status ──────────────────────────────────────────────────────────
@@ -359,15 +448,6 @@ class ParameterMonitor:
             queried_at              = datetime.now(timezone.utc).isoformat(),
         )
 
-    def update_historical_window(self, df: pd.DataFrame) -> None:
-        """
-        Update the raw historical window used by the forecaster.
-
-        Call this after appending each new measurement row to the master
-        dataset so the forecast always has an up-to-date context window.
-        """
-        self._historical_window = df
-
     # ── Private helpers ────────────────────────────────────────────────────────
 
     def _predict(self, X_row: pd.DataFrame) -> float:
@@ -384,6 +464,105 @@ class ParameterMonitor:
 
 
 # ── Convenience status query (no monitor instance needed) ──────────────────────
+
+def prepare_feature_row_from_raw(
+    df_history: pd.DataFrame,
+    new_raw_row: pd.DataFrame,
+    sensor: dict,
+    sensor_config: dict,
+) -> pd.DataFrame:
+    """
+    Append a new raw measurement to the historical dataset and return the
+    last feature row ready for model.predict().
+
+    This is the entry point for the IoT use-case where a sensor station
+    delivers raw values (Date, EC, pH, …) rather than a pre-computed feature
+    vector.  The function replicates the exact same feature engineering used
+    at training time so the column set is guaranteed to match the frozen model.
+
+    Parameters
+    ----------
+    df_history  : Historical dataset in the same column format as the
+                  onboarding CSV (raw values, not feature-engineered).
+                  Must contain at least max(lag_steps, rolling_rows) rows
+                  so that the last feature row can be computed without NaN.
+    new_raw_row : Single-row DataFrame with the new raw sensor values
+                  (same columns as df_history; Date column required).
+    sensor      : sensors_config.json entry for the parameter being monitored
+                  (output of get_sensor_entry()).
+    sensor_config : Full parsed sensors_config dict (for
+                    timestamp_column_candidates).
+
+    Returns
+    -------
+    pd.DataFrame — single-row feature DataFrame whose columns match those
+                   used when the frozen model was trained.
+
+    Raises
+    ------
+    ValueError  if there are not enough rows in the combined dataset to
+                compute the required lag / rolling features — e.g. at the
+                very beginning of a deployment when fewer than
+                max(lag_steps, rolling_rows) historical measurements exist.
+    """
+    import math
+    from src.forecasting.feature_engineering_generic import build_features_time_aware
+    from src.forecasting.frequency_detector import detect_frequency
+    from src.pipeline.timestamp_detector import detect_timestamp_column, parse_timestamp_column
+
+    param         = sensor["parameter_name"]
+    lag_hours     = sensor.get("lag_hours",     [24, 48, 72])
+    rolling_hours = sensor.get("rolling_hours", [72, 168])
+    co_variables  = sensor.get("co_variables") or []
+    candidates    = sensor_config.get(
+        "timestamp_column_candidates", ["Date", "timestamp", "date", "Time"]
+    )
+
+    # Parse timestamps in history (detect_timestamp_column enforces monotone)
+    ts_col     = detect_timestamp_column(df_history, candidates)
+    df_history = parse_timestamp_column(df_history, ts_col)
+
+    # Parse timestamp in the new row using the same column name
+    new_raw_row = new_raw_row.copy()
+    if ts_col in new_raw_row.columns:
+        new_raw_row[ts_col] = pd.to_datetime(new_raw_row[ts_col])
+
+    # Detect frequency from history only (before appending the new row)
+    frequency = detect_frequency(df_history, date_col=ts_col)
+
+    # Append new row and sort (guard against out-of-order delivery)
+    df_combined = (
+        pd.concat([df_history, new_raw_row], ignore_index=True)
+        .sort_values(ts_col)
+        .reset_index(drop=True)
+    )
+
+    # Build features — same call as _build_and_split() in orchestrator.py
+    X, _ = build_features_time_aware(
+        df_combined,
+        param,
+        frequency,
+        lag_hours     = lag_hours,
+        rolling_hours = rolling_hours,
+        co_variables  = co_variables if co_variables else None,
+    )
+
+    if len(X) == 0:
+        freq_h    = frequency.total_seconds() / 3600.0
+        max_lag   = max(max(1, math.floor(h / freq_h)) for h in lag_hours)
+        max_roll  = max(max(1, math.floor(h / freq_h)) for h in rolling_hours)
+        min_rows  = max(max_lag, max_roll) + 1
+        raise ValueError(
+            f"[{param}] Not enough history to compute features: "
+            f"{len(df_combined)} row(s) available after appending the new "
+            f"measurement, but {min_rows} are required "
+            f"(max rolling window = {max_roll} rows at "
+            f"{freq_h:.0f} h frequency). "
+            f"Collect more historical data before running monitor."
+        )
+
+    return X.tail(1).reset_index(drop=True)
+
 
 def get_system_status(
     parameter_name: str,

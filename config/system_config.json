@@ -1,47 +1,11 @@
 {
-  "_schema_version": "2.0",
-  "_doc": "Unified system configuration for the water-quality monitoring pipeline. All tunable constants live here; module constructors read defaults from this file via src/config.py. Explicit constructor overrides always win (needed for tests and per-deployment tuning).",
-
-  "sensors": {
-    "_doc": "Mirrors sensors_config.json — single source of truth for sensor metadata.",
-    "timestamp_column_candidates": ["Date", "timestamp", "date", "Time"],
-    "sensors": [
-      {
-        "column_name": "EC",
-        "parameter_name": "EC",
-        "unit": "µS/cm",
-        "wqi_standard": 400,
-        "co_variables": ["pH", "Turbidity"],
-        "lag_hours": [24, 48, 72],
-        "rolling_hours": [72, 168],
-        "_note": "Production model frozen (ec_xgboost_v1_final). Onboarding skipped."
-      },
-      {
-        "column_name": "Turbidity",
-        "parameter_name": "Turbidity",
-        "unit": "NTU",
-        "wqi_standard": 5,
-        "co_variables": ["pH", "EC"],
-        "lag_hours": [24, 48, 72],
-        "rolling_hours": [72, 168]
-      },
-      {
-        "column_name": "pH",
-        "parameter_name": "pH",
-        "unit": "pH",
-        "wqi_standard": 8.5,
-        "co_variables": ["EC", "Turbidity"],
-        "lag_hours": [24, 48, 72],
-        "rolling_hours": [72, 168]
-      }
-    ]
-  },
-
+  "_schema_version": "2.1",
+  "_doc": "Unified system configuration for the water-quality monitoring pipeline. All tunable constants live here; module constructors read defaults from this file via src/config.py. Explicit constructor overrides always win (needed for tests and per-deployment tuning). Sensor metadata (parameter names, units, feature config) lives exclusively in sensors_config.json — do not duplicate it here.",
   "retraining": {
     "_doc": "Governs the two-gate retrain policy (volume + drift) and sliding window.",
     "min_new_rows": 60,
     "_min_new_rows_rationale": "Below 60 rows the RMSE ratio estimate has high variance; spurious drift triggers occur. 60 rows ≈ 2 months of daily data at C-1 cadence.",
-    "rmse_ratio_threshold": 1.10,
+    "rmse_ratio_threshold": 1.1,
     "_rmse_ratio_rationale": "10% RMSE degradation on the recent window triggers drift signal. Validated against the C-1 KS power analysis (see drift_detector.py).",
     "tolerance": 0.02,
     "_tolerance_rationale": "Candidate accepted if new_rmse <= old_rmse*(1+tolerance). 2% accommodates XGBoost stochastic variance without blocking valid promotions.",
@@ -50,7 +14,6 @@
     "max_history_years": 5.0,
     "_max_history_rationale": "THEORETICAL — not validated on C-1 (single year). Balances seasonal coverage (≥3 cycles) against regime staleness (>10yr dilutes current signal). Revalidate when multi-year data is available."
   },
-
   "anomaly_detection": {
     "_doc": "Isolation Forest trained on prediction residuals (residual-based approach, A-12/N-2).",
     "score_threshold": 0.5,
@@ -59,25 +22,35 @@
     "_contamination_rationale": "Conservative prior: genuine sensor faults expected rare in a mine-adjacent station. Affects IF internal offset but NOT our custom score normalization.",
     "random_state": 42
   },
-
   "forecasting": {
     "_doc": "Recursive multi-step forecasting defaults.",
     "default_horizon_hours": 72,
     "_horizon_rationale": "3-day horizon matches the dataset's daily granularity and typical operational planning window. Error accumulation is acceptable up to ~72h (validated on EC)."
   },
-
   "validation": {
-    "_doc": "Physical plausibility bounds used by src/data/validation.py. Rows outside these bounds are rejected with an explicit reason — never silently.",
+    "_doc": "Physical plausibility bounds used by src/data/validation.py. Rows outside these bounds are rejected with an explicit reason — never silently. Only the three modelled parameters are listed here; TDS and WQI are out of scope for the CS pipeline and have no entry.",
     "max_duplicate_timestamp_fraction": 0.0,
     "physical_bounds": {
-      "pH":        {"min": 0.0,    "max": 14.0,    "unit": "pH",    "note": "WHO / standard range"},
-      "EC":        {"min": 0.0,    "max": 5000.0,  "unit": "µS/cm", "note": "Upper limit for heavily polluted freshwater"},
-      "Turbidity": {"min": 0.0,    "max": 10000.0, "unit": "NTU",   "note": "Extreme upper for mining-area flood events"},
-      "TDS":       {"min": 0.0,    "max": 3000.0,  "unit": "mg/L",  "note": "Approximate equivalent of EC bound"},
-      "WQI":       {"min": 0.0,    "max": 10000.0, "unit": "-",     "note": "Weighted Arithmetic Index, unbounded in theory"}
+      "pH": {
+        "min": 0.0,
+        "max": 14.0,
+        "unit": "pH",
+        "note": "WHO / standard range"
+      },
+      "EC": {
+        "min": 0.0,
+        "max": 5000.0,
+        "unit": "µS/cm",
+        "note": "Upper limit for heavily polluted freshwater"
+      },
+      "Turbidity": {
+        "min": 0.0,
+        "max": 10000.0,
+        "unit": "NTU",
+        "note": "Extreme upper for mining-area flood events"
+      }
     }
   },
-
   "logging": {
     "_doc": "Logging configuration applied by src/_logging.py. Console: INFO+. File: WARNING+.",
     "log_file": "logs/system.log",
@@ -85,5 +58,26 @@
     "file_level": "WARNING",
     "format": "%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
     "date_format": "%Y-%m-%d %H:%M:%S"
+  },
+  "exports": {
+    "_doc": "Rolling JSONL export written by src/monitor/export.py after every process_new_measurement() call. One file per parameter (e.g. exports/EC.jsonl). Retention is enforced on write — lines older than retention_days are purged based on the timestamp field inside each JSON line, not the file modification time.",
+    "exports_dir": "exports",
+    "retention_days": 30
+  },
+  "model_benchmark": {
+    "_doc": "Default hyperparameter search grid for benchmark_models(). Sized for small daily-frequency datasets (~300-500 rows, validated on the C-1 dataset: 365 rows, daily cadence, 9 features). For much larger or higher-frequency datasets, consider widening n_estimators/max_depth ranges manually — the pipeline does not auto-scale the search grid to dataset size.",
+    "rf_grid": {
+      "n_estimators": [50, 100, 200],
+      "max_depth": [3, 5, null]
+    },
+    "xgboost_grid": {
+      "max_depth": [2, 3, 5],
+      "n_estimators": [50, 100],
+      "learning_rate": [0.01, 0.05, 0.1]
+    },
+    "svr_grid": {
+      "C": [1, 10, 100],
+      "epsilon": [0.1, 1.0]
+    }
   }
 }

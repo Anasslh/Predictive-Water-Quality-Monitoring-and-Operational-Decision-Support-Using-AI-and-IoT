@@ -5,22 +5,104 @@ STRATEGY
 --------
 Try each candidate column name in order. A column qualifies if:
   1. It exists in the DataFrame.
-  2. Its values parse as datetimes without errors (using pd.to_datetime with
-     errors="raise", so a single unparseable value disqualifies the whole column).
-  3. After parsing, the values are strictly monotonically increasing — a basic
-     sanity check that rules out columns whose integer values happen to parse
-     but clearly are not ordered timestamps.
+  2. Its values parse as datetimes (see _try_parse below for format logic).
+  3. After parsing, the values are strictly monotonically increasing.
 
 The function returns the FIRST candidate that passes all three tests.
-It never guesses or infers from dtype alone; it always validates on real values.
 
-If no candidate qualifies, a ValueError is raised with a clear explanation of
-what was tried and why each candidate failed — no silent fallbacks.
+PARSING LOGIC (_try_parse)
+--------------------------
+To avoid the silent day/month inversion risk of unconstrained pd.to_datetime(),
+parsing follows a two-step protocol:
+
+  Step 1 — Strict ISO formats tried first (in order):
+      "%Y-%m-%dT%H:%M:%S"  full ISO 8601 with time
+      "%Y-%m-%d %H:%M:%S"  ISO with space separator
+      "%Y-%m-%d"           date-only ISO (the recommended format, used in C-1)
+
+      These are unambiguous: year-first, day/month never swapped.
+      If any succeeds with zero NaT values, it is used silently.
+
+  Step 2 — Automatic pandas inference as fallback:
+      If none of the ISO formats work, pd.to_datetime(col) is tried without
+      a format constraint. If it produces zero NaT values, it is accepted BUT
+      a WARNING is logged explicitly:
+
+          "timestamp column '<col>' parsed using automatic inference —
+           ambiguous day/month formats (e.g. 05/07/2026) may be misread as
+           month/day without warning; ISO format YYYY-MM-DD is strongly
+           recommended"
+
+      This ensures the fallback is never silent.
+
+  Failure — clear error:
+      If no candidate column passes all three checks, ValueError is raised
+      listing each candidate and the exact reason it was rejected.
 """
 
 from __future__ import annotations
 
+import logging
+import warnings
+
 import pandas as pd
+
+logger = logging.getLogger(__name__)
+
+# ISO formats tried in order — unambiguous, year first.
+_ISO_FORMATS = (
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%d",
+)
+
+
+def _try_parse(col: pd.Series) -> tuple[pd.Series, bool]:
+    """
+    Attempt to parse a Series as datetime, ISO-first then fallback.
+
+    Returns
+    -------
+    (parsed, used_inference)
+        parsed        : datetime64 Series (no NaT values on success).
+        used_inference: True if the automatic-inference fallback was used.
+
+    Raises
+    ------
+    ValueError  if every strategy produces at least one NaT or a parse error.
+    """
+    # Already datetime — accept without re-parsing
+    if pd.api.types.is_datetime64_any_dtype(col):
+        return col, False
+
+    # Step 1: try each ISO format with strict matching
+    for fmt in _ISO_FORMATS:
+        try:
+            parsed = pd.to_datetime(col, format=fmt, errors="coerce")
+        except Exception:
+            continue
+        if parsed.notna().all():
+            return parsed, False
+
+    # Step 2: pandas automatic inference as fallback.
+    # Suppress the pandas UserWarning about dateutil fallback — we emit our
+    # own explicit logger.warning() at the call site instead.
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            parsed = pd.to_datetime(col, errors="coerce")
+    except Exception as exc:
+        raise ValueError(f"automatic inference also failed: {exc}") from exc
+
+    if not parsed.notna().all():
+        n_nat = int(parsed.isna().sum())
+        bad = col[parsed.isna()].head(5).tolist()
+        raise ValueError(
+            f"{n_nat} value(s) could not be parsed as datetime "
+            f"(first bad values: {bad})"
+        )
+
+    return parsed, True   # succeeded via inference
 
 
 def detect_timestamp_column(
@@ -53,10 +135,10 @@ def detect_timestamp_column(
             failures.append(f"  '{col}': not found in DataFrame columns.")
             continue
 
-        # Check 2: parses as datetime without error
+        # Check 2: parses as datetime (ISO-first, inference fallback)
         try:
-            parsed = pd.to_datetime(df[col], errors="raise")
-        except (ValueError, TypeError) as exc:
+            parsed, used_inference = _try_parse(df[col])
+        except ValueError as exc:
             failures.append(f"  '{col}': datetime parse failed — {exc}.")
             continue
 
@@ -69,6 +151,15 @@ def detect_timestamp_column(
                 f"this column before calling detect_timestamp_column()."
             )
             continue
+
+        if used_inference:
+            logger.warning(
+                "timestamp column '%s' parsed using automatic inference — "
+                "ambiguous day/month formats (e.g. 05/07/2026) may be misread "
+                "as month/day without warning; ISO format YYYY-MM-DD is strongly "
+                "recommended",
+                col,
+            )
 
         return col
 
@@ -84,10 +175,10 @@ def detect_timestamp_column(
 
 def parse_timestamp_column(df: pd.DataFrame, col: str) -> pd.DataFrame:
     """
-    Parse the detected timestamp column in-place and sort the DataFrame.
+    Parse the detected timestamp column and sort the DataFrame.
 
-    Convenience wrapper: converts col to datetime64, sorts ascending, and
-    resets the index. Returns a new DataFrame (does not modify in place).
+    Uses the same ISO-first / inference-fallback protocol as detect_timestamp_column()
+    to guarantee consistent parsing between detection and actual conversion.
 
     Parameters
     ----------
@@ -99,6 +190,22 @@ def parse_timestamp_column(df: pd.DataFrame, col: str) -> pd.DataFrame:
     pd.DataFrame  — sorted copy with col as datetime64.
     """
     df = df.copy()
-    df[col] = pd.to_datetime(df[col])
+    try:
+        parsed, used_inference = _try_parse(df[col])
+    except ValueError as exc:
+        raise ValueError(
+            f"parse_timestamp_column: column '{col}' could not be parsed — {exc}"
+        ) from exc
+
+    if used_inference:
+        logger.warning(
+            "parse_timestamp_column: column '%s' parsed using automatic inference — "
+            "ambiguous day/month formats (e.g. 05/07/2026) may be misread "
+            "as month/day without warning; ISO format YYYY-MM-DD is strongly "
+            "recommended",
+            col,
+        )
+
+    df[col] = parsed
     df = df.sort_values(col).reset_index(drop=True)
     return df

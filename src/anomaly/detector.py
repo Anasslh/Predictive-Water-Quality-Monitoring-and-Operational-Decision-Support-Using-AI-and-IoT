@@ -24,9 +24,14 @@ Contamination:
   normalization; the 0.5 threshold on the normalized score is independent.
 """
 
+import pickle
+from pathlib import Path
+
 import numpy as np
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import MinMaxScaler
+
+_DETECTOR_FILENAME = "anomaly_detector.pkl"
 
 
 class ECAnomalyDetector:
@@ -134,3 +139,30 @@ class ECAnomalyDetector:
             raise RuntimeError(
                 "ECAnomalyDetector has not been fitted yet — call fit() first."
             )
+
+
+# ── Persistence helpers ────────────────────────────────────────────────────────
+
+def save_anomaly_detector(
+    detector: ECAnomalyDetector,
+    models_store_path: str | Path,
+) -> Path:
+    """Serialize a fitted ECAnomalyDetector to <models_store_path>/anomaly_detector.pkl."""
+    out_path = Path(models_store_path) / _DETECTOR_FILENAME
+    with open(out_path, "wb") as f:
+        pickle.dump(detector, f)
+    return out_path
+
+
+def load_anomaly_detector(
+    models_store_path: str | Path,
+) -> "ECAnomalyDetector | None":
+    """Load a fitted ECAnomalyDetector from <models_store_path>/anomaly_detector.pkl.
+
+    Returns None if the file does not exist (detector not yet trained for this parameter).
+    """
+    p = Path(models_store_path) / _DETECTOR_FILENAME
+    if not p.exists():
+        return None
+    with open(p, "rb") as f:
+        return pickle.load(f)

@@ -1,0 +1,23 @@
+{
+  "target": "EC",
+  "frequency_seconds": 86400,
+  "lag_hours": [
+    24,
+    48,
+    72
+  ],
+  "rolling_hours": [
+    72,
+    168
+  ],
+  "co_variables": [
+    "pH",
+    "Turbidity"
+  ],
+  "residual_std_by_step": [
+    46.587337,
+    65.884444,
+    80.691634
+  ],
+  "n_steps": 3
+}
