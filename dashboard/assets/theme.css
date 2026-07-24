@@ -1,0 +1,123 @@
+/* ============================================================================
+   theme.css — Water Quality Monitoring dashboard design system
+   Mirrors dashboard/config/theme.py tokens. Restrained operations-console look:
+   neutral canvas, deep-slate structure, muted teal accent. Borders, whitespace
+   and typography carry the hierarchy — not shadows or gradients.
+   Component classes (wq-*) are applied to HTML the dashboard fully controls, so
+   the interface stays intentional even if these Streamlit overrides are ignored.
+   ========================================================================== */
+
+:root {
+  --wq-bg: #eef0f3;
+  --wq-surface: #ffffff;
+  --wq-surface-alt: #f7f8fa;
+  --wq-structure: #152230;
+  --wq-structure-2: #1e2f40;
+  --wq-ink: #1b2430;
+  --wq-ink-2: #5b6472;
+  --wq-ink-3: #8b93a0;
+  --wq-border: #dce0e6;
+  --wq-border-strong: #c3c9d2;
+  --wq-accent: #0e7c86;
+  --wq-accent-soft: #e0f0f1;
+  --wq-accent-2: #2f6f9f;
+  --wq-warn: #b9770e;
+  --wq-critical: #b23b3b;
+  --wq-ok: #2f7d5d;
+  --wq-radius: 6px;
+  --wq-font: "Inter", -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+/* ── Streamlit canvas overrides (refinement only) ────────────────────────── */
+.stApp { background: var(--wq-bg); }
+.block-container { padding-top: 1.1rem; padding-bottom: 2.5rem; max-width: 1320px; }
+html, body, [class*="css"] { font-family: var(--wq-font); color: var(--wq-ink); }
+
+/* Sidebar → deep slate structural rail */
+[data-testid="stSidebar"] { background: var(--wq-structure); border-inline-end: 1px solid #0c1620; }
+[data-testid="stSidebar"] * { color: #d7dde4; }
+[data-testid="stSidebar"] .wq-side-title {
+  color: #f2f5f8; font-weight: 600; font-size: 0.95rem; letter-spacing: 0.02em;
+  padding: 0.2rem 0 0.1rem;
+}
+[data-testid="stSidebar"] .wq-side-sub { color: #97a4b2; font-size: 0.72rem; margin-bottom: 0.6rem; }
+[data-testid="stSidebar"] hr { border-color: #2a3b4d; }
+
+/* ── Global header band ──────────────────────────────────────────────────── */
+.wq-header {
+  display: flex; justify-content: space-between; align-items: center; gap: 1rem;
+  background: var(--wq-structure); color: #eef2f6;
+  border-radius: var(--wq-radius); padding: 0.85rem 1.15rem; margin-bottom: 1.1rem;
+  border: 1px solid #0c1620;
+}
+.wq-header-title { font-size: 1.15rem; font-weight: 650; letter-spacing: 0.01em; }
+.wq-header-sub { font-size: 0.78rem; color: #9fb0be; margin-top: 1px; }
+.wq-header-meta { display: flex; align-items: center; gap: 1.4rem; flex-wrap: wrap; }
+.wq-meta-item { display: flex; flex-direction: column; line-height: 1.25; }
+.wq-meta-k { font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.06em; color: #8ea0af; }
+.wq-meta-v { font-size: 0.85rem; color: #e8edf1; font-weight: 500; }
+
+/* ── Status pill ─────────────────────────────────────────────────────────── */
+.wq-pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 0.72rem; font-weight: 600; padding: 3px 9px; border-radius: 999px;
+  white-space: nowrap;
+}
+
+/* ── Section heading ─────────────────────────────────────────────────────── */
+.wq-section { margin: 1.4rem 0 0.7rem; border-bottom: 1px solid var(--wq-border); padding-bottom: 0.35rem; }
+.wq-section-title { font-size: 0.95rem; font-weight: 650; color: var(--wq-ink); letter-spacing: 0.01em; }
+.wq-section-sub { font-size: 0.78rem; color: var(--wq-ink-2); margin-top: 2px; }
+
+/* ── KPI tiles ───────────────────────────────────────────────────────────── */
+.wq-tile {
+  background: var(--wq-surface); border: 1px solid var(--wq-border);
+  border-radius: var(--wq-radius); padding: 0.7rem 0.85rem; height: 100%;
+}
+.wq-tile-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--wq-ink-2); }
+.wq-tile-value { font-size: 1.35rem; font-weight: 640; color: var(--wq-ink); margin-top: 3px; line-height: 1.15;
+  font-variant-numeric: tabular-nums; }
+.wq-tile-sub { font-size: 0.74rem; color: var(--wq-ink-2); margin-top: 3px; }
+
+/* ── Key/value table ─────────────────────────────────────────────────────── */
+.wq-kv { border: 1px solid var(--wq-border); border-radius: var(--wq-radius); overflow: hidden; background: var(--wq-surface); }
+.wq-kv-row { display: flex; justify-content: space-between; gap: 1rem; padding: 0.5rem 0.85rem; border-bottom: 1px solid var(--wq-border); }
+.wq-kv-row:last-child { border-bottom: none; }
+.wq-kv-row:nth-child(even) { background: var(--wq-surface-alt); }
+.wq-kv-k { font-size: 0.8rem; color: var(--wq-ink-2); }
+.wq-kv-v { font-size: 0.82rem; color: var(--wq-ink); font-weight: 550; text-align: end; font-variant-numeric: tabular-nums; }
+
+/* ── SHAP panel ──────────────────────────────────────────────────────────── */
+.wq-shap-intro { font-size: 0.78rem; color: var(--wq-ink-2); margin-bottom: 0.6rem; line-height: 1.45; }
+.wq-shap { border: 1px solid var(--wq-border); border-radius: var(--wq-radius); background: var(--wq-surface); overflow: hidden; }
+.wq-shap-head, .wq-shap-row {
+  display: grid; grid-template-columns: 1.5fr 2fr 0.7fr 1.1fr; gap: 0.6rem; align-items: center;
+  padding: 0.45rem 0.8rem;
+}
+.wq-shap-head { background: var(--wq-surface-alt); font-size: 0.68rem; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--wq-ink-2); border-bottom: 1px solid var(--wq-border); }
+.wq-shap-row { border-bottom: 1px solid var(--wq-border); font-size: 0.82rem; }
+.wq-shap-row:last-child { border-bottom: none; }
+.wq-shap-feat { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 0.78rem; color: var(--wq-ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wq-shap-bar-wrap { background: var(--wq-surface-alt); border-radius: 3px; height: 8px; overflow: hidden; }
+.wq-shap-bar { height: 100%; border-radius: 3px; }
+.wq-shap-val { font-variant-numeric: tabular-nums; color: var(--wq-ink-2); font-size: 0.78rem; text-align: end; }
+.wq-shap-dir { font-size: 0.76rem; font-weight: 550; }
+.wq-shap-empty { padding: 0.8rem; color: var(--wq-ink-3); font-size: 0.82rem; }
+
+/* ── Empty state (calm, non-alarming) ────────────────────────────────────── */
+.wq-empty { padding: 1.1rem 1.2rem; }
+.wq-empty-title { font-size: 0.9rem; font-weight: 600; color: var(--wq-ink); margin-bottom: 0.25rem; }
+.wq-empty-body { font-size: 0.82rem; color: var(--wq-ink-2); line-height: 1.5; max-width: 70ch; }
+
+/* ── Quiet footnote ──────────────────────────────────────────────────────── */
+.wq-notice { font-size: 0.74rem; color: var(--wq-ink-3); margin-top: 1.5rem; padding-top: 0.6rem;
+  border-top: 1px solid var(--wq-border); }
+
+/* ── Data tables (st.dataframe wrapper tweaks) ───────────────────────────── */
+[data-testid="stDataFrame"] { border: 1px solid var(--wq-border); border-radius: var(--wq-radius); }
+
+/* ── RTL adjustments ─────────────────────────────────────────────────────── */
+.stApp[dir="rtl"] .wq-shap-feat, [dir="rtl"] .wq-shap-feat { direction: ltr; text-align: right; }
+[dir="rtl"] .wq-tile-value, [dir="rtl"] .wq-kv-v { direction: ltr; }

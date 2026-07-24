@@ -9,3 +9,7 @@ models_store/*.pkl
 venv/
 *.egg-info/
 CLAUDE.md
+
+# Dashboard
+.pytest_cache/
+**/secrets.toml
