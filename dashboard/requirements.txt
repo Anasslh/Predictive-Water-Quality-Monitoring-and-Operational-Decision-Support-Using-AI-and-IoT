@@ -1,0 +1,11 @@
+# Dashboard MVP dependencies (kept separate from the ML pipeline's
+# requirements.txt so the dashboard can be deployed on its own machine that
+# reads only the exported files — no scikit-learn / xgboost / shap needed).
+#
+# Verified working versions (installed during development): streamlit 1.60.0,
+# plotly 6.9.0, pandas 3.0.5, pytest 8.x on CPython 3.11.
+
+streamlit>=1.36        # dashboard runtime (st.navigation, AppTest testing API)
+plotly>=5.22           # charts
+pandas>=2.0            # WQI CSV + anomalies table
+pytest>=7.0            # test suite (dashboard/tests)

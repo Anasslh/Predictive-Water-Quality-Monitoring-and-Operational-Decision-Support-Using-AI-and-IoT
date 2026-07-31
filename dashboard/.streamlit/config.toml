@@ -1,0 +1,22 @@
+# Native Streamlit theme — set here so the app looks intentional even before the
+# custom stylesheet loads (and if custom CSS is ever disabled). Mirrors the
+# tokens in dashboard/config/theme.py.
+[theme]
+base = "light"
+primaryColor = "#0e7c86"          # muted teal — water accent
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#eef0f3"
+textColor = "#1b2430"
+font = "sans serif"
+
+[server]
+headless = true
+runOnSave = true
+
+[browser]
+gatherUsageStats = false
+
+[client]
+# Supported Streamlit setting: retain the menu/accessibility controls while
+# removing development-oriented toolbar emphasis in review/demo sessions.
+toolbarMode = "minimal"
