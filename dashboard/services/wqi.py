@@ -1,7 +1,7 @@
 """
 wqi.py — Load the historical WQI diagnostic (methodology page only).
 
-The Weighted Arithmetic WQI is NOT part of the live export contract. It exists
+The Weighted Arithmetic WQI is NOT part of the monitoring export contract. It exists
 only as static per-row columns in the processed training artifact
 ``data/processed/c1_with_wqi.csv`` (WQI_new, Class_new, Qi_*), computed with
 drinking-water reference standards. This module surfaces it strictly as a

@@ -20,10 +20,17 @@ APP = str(Path(__file__).resolve().parents[1] / "app.py")
 NAV_LABELS = [
     "Overview",
     "Parameter detail",
-    "Forecast",
     "Anomalies & alerts",
-    "Model health",
+    "Model monitoring",
     "Data & methodology",
+]
+
+AR_NAV_LABELS = [
+    "نظرة عامة",
+    "تفاصيل المؤشر",
+    "الحالات الشاذة والتنبيهات",
+    "مراقبة النموذج",
+    "البيانات والمنهجية",
 ]
 
 
@@ -70,12 +77,76 @@ def test_smoke_arabic_rtl(exports_dir_messy, monkeypatch):
     at = _run({"WQD_EXPORTS_DIR": str(exports_dir_messy)}, monkeypatch)
     at.radio(key="lang").set_value("ar").run(timeout=60)
     assert not at.exception
+    assert list(at.radio(key="nav").options) == AR_NAV_LABELS
+    joined = " ".join(m.value for m in at.markdown)
+    assert "direction: rtl" in joined
+
+    for label in AR_NAV_LABELS:
+        at.radio(key="nav").set_value(label).run(timeout=60)
+        assert not at.exception, f"Arabic view '{label}' raised"
+
+    at.radio(key="nav").set_value("الحالات الشاذة والتنبيهات").run(timeout=60)
+    assert at.dataframe
+    assert "الطابع الزمني" in list(at.dataframe[0].value.columns)
 
 
-def test_smoke_forecast_empty_state(exports_dir_messy, monkeypatch):
-    """Forecast view must render its calm empty state (no forecast in exports)."""
+def test_forecast_navigation_hidden_without_exported_values(exports_dir_messy, monkeypatch):
     at = _run({"WQD_EXPORTS_DIR": str(exports_dir_messy)}, monkeypatch)
+    assert not at.exception
+    assert "Forecast" not in list(at.radio(key="nav").options)
+    joined = " ".join(m.value for m in at.markdown)
+    assert "Forecast not in current export contract" not in joined
+
+
+def test_forecast_navigation_enabled_with_valid_export(tmp_path, monkeypatch):
+    import json
+
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    record = {
+        "timestamp": "2026-07-21T12:00:00+00:00",
+        "parameter_name": "EC",
+        "predicted_value": 100.0,
+        "actual_value": 101.0,
+        "is_anomaly": False,
+        "forecast": {"predictions": [102.0, 103.0], "step_hours": 1},
+    }
+    (exports / "EC.jsonl").write_text(json.dumps(record) + "\n", encoding="utf-8")
+    at = _run({"WQD_EXPORTS_DIR": str(exports)}, monkeypatch)
+    assert "Forecast" in list(at.radio(key="nav").options)
     at.radio(key="nav").set_value("Forecast").run(timeout=60)
     assert not at.exception
     joined = " ".join(m.value for m in at.markdown)
-    assert "Forecast" in joined
+    assert "Short-term forecast" in joined
+    assert "Forecast not in current export contract" not in joined
+
+
+def test_wqi_only_appears_on_methodology(monkeypatch):
+    at = _run(None, monkeypatch)
+    overview = " ".join(m.value for m in at.markdown)
+    assert "Water Quality Index" not in overview
+    assert "WQI" not in overview
+
+    at.radio(key="nav").set_value("Data & methodology").run(timeout=60)
+    methodology = " ".join(m.value for m in at.markdown)
+    assert "Water Quality Index (WQI)" in methodology
+    assert "not live and not a water-safety verdict" in methodology
+
+
+def test_historical_header_has_no_delayed_alert(monkeypatch):
+    at = _run(None, monkeypatch)
+    joined = " ".join(m.value for m in at.markdown)
+    assert "Historical dataset" in joined
+    assert "Delayed" not in joined
+
+
+def test_null_optional_model_fields_are_hidden(monkeypatch):
+    """The real status export has null version/update and no R² or drift field."""
+    at = _run(None, monkeypatch)
+    at.radio(key="nav").set_value("Model monitoring").run(timeout=60)
+    joined = " ".join(m.value for m in at.markdown)
+    assert "Model monitoring active" in joined
+    assert "Model version" not in joined
+    assert "Last model update" not in joined
+    assert "R²" not in joined
+    assert "Drift status" not in joined

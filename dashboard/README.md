@@ -7,9 +7,9 @@ answer, at a glance:
 1. What is the current water-quality state?
 2. What changed recently?
 3. Is any reading abnormal?
-4. What does the model predict next? *(when forecasts are exported)*
+4. What does the model predict next? *(the view appears only when forecasts are exported)*
 5. Why did the model produce this prediction? *(SHAP, in plain language)*
-6. Is the model currently healthy?
+6. Which model-monitoring metrics are available?
 7. Is retraining review required?
 
 It is **decoupled** from the ML code: it reads only `exports/<param>.jsonl` and
@@ -17,8 +17,8 @@ It is **decoupled** from the ML code: it reads only `exports/<param>.jsonl` and
 run on a separate machine that only receives a synced `exports/` folder.
 
 > **Scope note.** Under the default *generalist* profile the dashboard makes **no
-> drinking-water safety claim**. It shows model-monitored measurements against
-> documented reference values only. See `ASSUMPTIONS.md`.
+> drinking-water safety claim**. Drinking-water WQI references are confined to
+> the methodology page and are not operational chart limits. See `ASSUMPTIONS.md`.
 
 ---
 
@@ -72,6 +72,8 @@ All optional; sensible defaults resolve relative to the repository root.
 | `WQD_EXPORTS_DIR` | `<repo>/exports` | Where `<param>.jsonl` / `<param>_status.json` live. Point at a synced folder on a separate host. |
 | `WQD_PROCESSED_DIR` | `<repo>/data/processed` | Location of `c1_with_wqi.csv` (methodology page). |
 | `WQD_SITE_NAME` | `C-1 — Ramgarh Station` | Header site label. |
+| `WQD_DATA_SOURCE_MODE` | `historical` | `historical` disables freshness-alert semantics; `continuous` enables the documented cadence heuristic. |
+| `WQD_DATA_SOURCE_NOTE` | `Historical research data` (translated fallback) | Optional deployment-specific source qualifier. |
 | `WQD_WATER_USE` | `generalist` | `generalist` \| `drinking` \| `irrigation` (affects reference-line labelling only). |
 | `WQD_DEFAULT_LANG` | `en` | `en` \| `ar`. |
 | `WQD_RETENTION_DAYS` | `30` | Rolling window (mirror the pipeline). |
@@ -98,11 +100,11 @@ exact confirmed schema. With no exports present, the dashboard shows a calm
 
 | View | Shows |
 |------|-------|
-| **Overview** | Latest state, trend, anomaly & health per parameter; system KPIs. |
-| **Parameter detail** | Actual vs predicted history, anomaly markers, reference line, date filter, data quality, SHAP explanation. |
-| **Forecast** | Multi-step forecast **when exported** (empty state otherwise — never fabricated). |
+| **Overview** | Latest measured state, trend, affected-parameter anomaly count, source status, and neutral model-monitoring availability. |
+| **Parameter detail** | Measured vs predicted history, preserved gaps, anomaly markers, date filter, data quality, SHAP explanation. |
+| **Forecast** | Multi-step forecast **only when valid forecast values are exported**; otherwise the navigation item is absent. |
 | **Anomalies & alerts** | All flagged anomalies across parameters, chronological. |
-| **Model health** | Version, RMSE, MAE, skill vs persistence, pending approvals, rejections. |
+| **Model monitoring** | Available RMSE, MAE, skill vs persistence, counts and optional version/update fields; no inferred health class. |
 | **Data & methodology** | Data source, units, limitations, and the historical WQI diagnostic with full caveats. |
 
 ---
@@ -119,7 +121,7 @@ dashboard/
 ├── components/          # formatting, Plotly chart builders, layout, SHAP panel
 ├── views/               # the six pages
 ├── assets/theme.css     # design system stylesheet
-├── tests/               # 51 tests (unit + Streamlit AppTest smoke)
+├── tests/               # unit + Streamlit AppTest coverage
 └── *.md                 # README, DATA_CONTRACT, ASSUMPTIONS, IMPLEMENTATION_REPORT
 ```
 
@@ -137,7 +139,20 @@ From the repository root:
 |---------|-------------|
 | "No exported parameters found" | `WQD_EXPORTS_DIR` has no `*.jsonl`. Run the pipeline or set the variable. |
 | A parameter is missing | It has no `<param>.jsonl` yet (e.g. pH/Turbidity before their first `monitor` run). |
-| Model version / metrics show `—` | `status.json` field is `null`/absent (e.g. `model_version`, or R²/drift which are not exported). |
-| Forecast view is empty | Forecasts are not in the current export contract (by design — not fabricated). |
+| Model version / optional metric is absent | Null or unavailable optional fields are intentionally omitted instead of rendered as `—`. |
+| Forecast is absent from navigation | No valid forecast values exist in the current export contract. The existing view activates automatically when they do. |
 | `ModuleNotFoundError: dashboard` | Run from the **repository root**, or use the helper scripts. |
 | Arabic layout looks LTR | Toggle the language in the sidebar, or set `WQD_DEFAULT_LANG=ar`. |
+
+## Record and chart policies
+
+- Records are sorted chronologically. Exact duplicate rows are removed; when
+  conflicting rows share one parseable timestamp, the last complete source row
+  wins. Fields are never merged between rows.
+- A missing measured value remains missing. It is never filled from the model
+  prediction, and the measured line uses `connectgaps=False` so gaps remain visible.
+- “Parameters with active anomalies” counts affected parameters whose latest
+  evaluated record is anomalous; the Anomalies view remains record-level.
+- The current EC export has unique timestamps, but repeated research/replay runs
+  create sharply alternating measured values within fractions of a second. This
+  upstream data-quality characteristic is disclosed in Methodology, not hidden.

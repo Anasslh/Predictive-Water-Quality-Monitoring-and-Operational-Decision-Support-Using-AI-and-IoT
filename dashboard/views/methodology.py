@@ -28,8 +28,24 @@ _LIMITATIONS: list[tuple[str, str]] = [
         "يحسب النظام التنبؤات لكنها غير محفوظة في عقد التصدير الحالي.",
     ),
     (
-        "R² and an explicit drift status are not part of the status export.",
-        "معامل التحديد R² وحالة الانزياح الصريحة غير مُضمَّنة في تصدير الحالة.",
+        "Historical mode disables operational freshness alerts; a future continuous source requires an approved cadence or SLA.",
+        "يعطّل الوضع التاريخي تنبيهات حداثة البيانات التشغيلية؛ ويتطلب المصدر المستمر مستقبلاً وتيرة أو اتفاقية مستوى خدمة معتمدة.",
+    ),
+    (
+        "No approved model-health classification rule exists. Available RMSE, MAE and skill values are presented as metrics, not pass/fail verdicts.",
+        "لا توجد قاعدة معتمدة لتصنيف صحة النموذج. تُعرض قيم RMSE وMAE والأداء المتاحة كمقاييس، لا كحكم نجاح أو فشل.",
+    ),
+    (
+        "Optional fields such as model version, last model update, R² and drift status are omitted when the export does not provide them.",
+        "تُحذف الحقول الاختيارية مثل إصدار النموذج وآخر تحديث وR² وحالة الانزياح عندما لا يوفرها التصدير.",
+    ),
+    (
+        "For duplicate timestamps, the dashboard keeps the last complete source record and never merges measured and predicted fields across records.",
+        "عند تكرار الطابع الزمني، تحتفظ اللوحة بآخر سجل مصدر كامل ولا تدمج الحقول المقاسة والمتنبأ بها بين السجلات.",
+    ),
+    (
+        "The current EC export has unique timestamps but includes repeated research/replay runs in tight succession, with sharply alternating measured values.",
+        "يحتوي تصدير EC الحالي على طوابع زمنية فريدة، لكنه يتضمن عمليات بحثية أو معادة متقاربة مع تناوب حاد في القيم المقاسة.",
     ),
     (
         "The WQI uses drinking-water standards and is a historical diagnostic only, not a live verdict.",
@@ -48,14 +64,15 @@ def render(ctx: AppContext) -> None:
     # ── Data source & units ─────────────────────────────────────────────────
     rows = [
         (tr.t("data_source"), s.site_name),
+        (tr.t("data_status"), tr.t("source_historical") if s.data_source_mode == "historical" else tr.t("source_continuous")),
         (tr.t("generated_from"), str(s.exports_dir)),
         (tr.t("profile"), tr.t(f"profile_{s.water_use_profile}")),
     ]
     for name, pdata in ctx.params.items():
         unit = pdata.display_unit or DASH
-        ver = pdata.status.model_version if pdata.status and pdata.status.model_version else DASH
         rows.append((f"{name} · {tr.t('units')}", unit))
-        rows.append((f"{name} · {tr.t('model_version')}", ver))
+        if pdata.status and pdata.status.model_version:
+            rows.append((f"{name} · {tr.t('model_version')}", pdata.status.model_version))
     layout.kv_table(rows)
 
     # ── Known limitations ───────────────────────────────────────────────────

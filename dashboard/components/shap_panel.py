@@ -46,32 +46,31 @@ def render_shap(record: MeasurementRecord | None, tr: Translator) -> None:
     magnitudes = [abs(f.shap_value) for f in record.shap_top_features if f.shap_value is not None]
     max_mag = max(magnitudes) if magnitudes else 1.0
 
+    # Build compact HTML on single lines: any line indented 4+ spaces or separated
+    # by a blank line would be re-interpreted by Streamlit's markdown as a code
+    # block, so the whole panel is assembled without leading whitespace/newlines.
     rows_html = []
     for f in record.shap_top_features:
         dir_text, dir_color = _direction_label(f.direction, f.shap_value, tr)
         mag = abs(f.shap_value) if f.shap_value is not None else 0.0
         width = int((mag / max_mag) * 100) if max_mag else 0
         rows_html.append(
-            f"""
-            <div class="wq-shap-row">
-              <div class="wq-shap-feat" title="{f.feature}">{f.feature}</div>
-              <div class="wq-shap-bar-wrap">
-                <div class="wq-shap-bar" style="width:{width}%;background:{dir_color};"></div>
-              </div>
-              <div class="wq-shap-val">{fmt_number(f.shap_value, 3)}</div>
-              <div class="wq-shap-dir" style="color:{dir_color};">{dir_text}</div>
-            </div>
-            """
+            '<div class="wq-shap-row">'
+            f'<div class="wq-shap-feat" dir="ltr" title="{f.feature}">{f.feature}</div>'
+            '<div class="wq-shap-bar-wrap">'
+            f'<div class="wq-shap-bar" style="width:{width}%;background:{dir_color};"></div>'
+            '</div>'
+            f'<div class="wq-shap-val" dir="ltr">{fmt_number(f.shap_value, 3)}</div>'
+            f'<div class="wq-shap-dir" style="color:{dir_color};">{dir_text}</div>'
+            '</div>'
         )
-    st.markdown(
-        f"""
-        <div class="wq-shap">
-          <div class="wq-shap-head">
-            <div>{tr.t('feature')}</div><div></div>
-            <div>{tr.t('influence')}</div><div>{tr.t('direction')}</div>
-          </div>
-          {''.join(rows_html)}
-        </div>
-        """,
-        unsafe_allow_html=True,
+    html = (
+        '<div class="wq-shap">'
+        '<div class="wq-shap-head">'
+        f'<div>{tr.t("feature")}</div><div></div>'
+        f'<div>{tr.t("influence")}</div><div>{tr.t("direction")}</div>'
+        '</div>'
+        + "".join(rows_html)
+        + '</div>'
     )
+    st.markdown(html, unsafe_allow_html=True)

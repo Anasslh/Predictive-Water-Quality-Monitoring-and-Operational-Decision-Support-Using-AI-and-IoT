@@ -2,8 +2,9 @@
 transforms.py — Derive operational view-model values from cleaned data.
 
 Pure functions (no I/O, no Streamlit) that turn ParameterData into the small
-derived quantities the UI renders: latest state, trend, data freshness, anomaly
-lists and simple health tokens. Deterministic and unit-testable.
+derived quantities the UI renders: latest state, trend, source-aware freshness,
+anomaly lists, forecast availability and neutral model status. Deterministic
+and unit-testable.
 
 Freshness note
 --------------
@@ -70,7 +71,7 @@ def median_gap_seconds(pdata: ParameterData) -> float | None:
 
 @dataclass(frozen=True)
 class Freshness:
-    state: str                    # "fresh" | "stale" | "unknown"
+    state: str                    # "fresh" | "stale" | "historical" | "unknown"
     last_timestamp: datetime | None
     age_seconds: float | None
 
@@ -79,8 +80,9 @@ def freshness(
     pdata: ParameterData,
     now: datetime | None = None,
     multiplier: float = 3.0,
+    source_mode: str = "continuous",
 ) -> Freshness:
-    """Classify how current the parameter's newest record is."""
+    """Classify source freshness, disabling alert semantics for historical data."""
     now = now or datetime.now(timezone.utc)
     last = None
     for rec in reversed(pdata.records):
@@ -91,6 +93,8 @@ def freshness(
         return Freshness("unknown", None, None)
 
     age = (now - last).total_seconds()
+    if source_mode == "historical":
+        return Freshness("historical", last, age)
     gap = median_gap_seconds(pdata)
     if gap is None:
         # Only one dated record: we cannot infer a cadence → don't guess "stale".
@@ -99,9 +103,18 @@ def freshness(
     return Freshness(state, last, age)
 
 
-def system_freshness(params: dict[str, ParameterData], multiplier: float = 3.0) -> str:
+def system_freshness(
+    params: dict[str, ParameterData],
+    multiplier: float = 3.0,
+    source_mode: str = "continuous",
+) -> str:
     """Worst-case freshness across all parameters: stale > unknown > fresh."""
-    states = {freshness(p, multiplier=multiplier).state for p in params.values()}
+    if source_mode == "historical":
+        return "historical"
+    states = {
+        freshness(p, multiplier=multiplier, source_mode=source_mode).state
+        for p in params.values()
+    }
     if "stale" in states:
         return "stale"
     if states == {"fresh"}:
@@ -141,27 +154,29 @@ def count_active_anomalies(params: dict[str, ParameterData]) -> int:
     return sum(1 for p in params.values() if latest_anomaly_state(p) == "anomaly")
 
 
+def has_forecast_data(params: dict[str, ParameterData]) -> bool:
+    """True only when at least one exported record contains valid forecast values."""
+    return any(
+        rec.forecast is not None and bool(rec.forecast.predictions)
+        for pdata in params.values()
+        for rec in pdata.records
+    )
+
+
 # ── Health token ─────────────────────────────────────────────────────────────
 
-def health_token(pdata: ParameterData) -> str:
+def model_status(pdata: ParameterData) -> str:
     """
-    Coarse model-health token for compact display.
+    Neutral operational token for the model layer: "active" | "unavailable".
 
-    "critical" if retraining is pending review or rejections have accumulated;
-    "warn" if 30-day skill is negative (worse than persistence);
-    "ok" if skill is positive; "neutral" when unknown/insufficient.
+    This is deliberately NOT a health / pass-fail verdict. No approved
+    model-health acceptance thresholds exist yet (see dashboard/ASSUMPTIONS.md),
+    so the dashboard never claims a model is "healthy" or has "passed". It only
+    states whether monitoring is active (a status snapshot exists) or not. The
+    raw performance figures (RMSE, MAE, skill) and the pending-review counts are
+    presented separately, as facts, on the Model health page.
     """
-    status = pdata.status
-    if status is None:
-        return "neutral"
-    if status.pending_approvals > 0 or status.consecutive_rejections >= 3:
-        return "critical"
-    perf = status.performance
-    if perf.insufficient_data or perf.skill_vs_persistence_pct is None:
-        return "neutral"
-    if perf.skill_vs_persistence_pct < 0:
-        return "warn"
-    return "ok"
+    return "unavailable" if pdata.status is None else "active"
 
 
 def count_pending_reviews(params: dict[str, ParameterData]) -> int:

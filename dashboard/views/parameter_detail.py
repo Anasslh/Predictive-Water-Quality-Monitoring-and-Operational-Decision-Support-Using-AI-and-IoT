@@ -1,9 +1,9 @@
 """
 parameter_detail.py — Deep view for a single parameter.
 
-Current value, latest prediction and error, the actual-vs-predicted history with
-anomaly markers and documented reference line, a date-range filter, data-quality
-indicators, the SHAP explanation, and the model-status summary.
+Current value, latest prediction and error, measured-vs-predicted history with
+anomaly markers, a date-range filter, data-quality indicators and SHAP context.
+Drinking-water WQI references are intentionally confined to Methodology.
 """
 
 from __future__ import annotations
@@ -58,9 +58,7 @@ def render(ctx: AppContext) -> None:
     # ── History chart with date-range filter ────────────────────────────────
     layout.section(tr.t("history"))
     filtered = _date_range_filter(pdata, tr)
-    fig = charts.actual_vs_predicted(
-        filtered, tr, water_use_profile=ctx.settings.water_use_profile
-    )
+    fig = charts.actual_vs_predicted(filtered, tr)
     st.plotly_chart(fig, width="stretch", config=layout.plotly_config())
 
     # ── Data quality + explanation, side by side ────────────────────────────

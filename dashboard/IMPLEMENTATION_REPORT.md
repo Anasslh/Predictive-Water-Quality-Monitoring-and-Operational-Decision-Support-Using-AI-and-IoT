@@ -1,7 +1,7 @@
 # Implementation Report — Dashboard MVP
 
 **Branch:** `feature/dashboard-mvp`
-**Date:** 2026-07-24
+**Last reviewed:** 2026-07-31
 **Scope:** Operational decision-support dashboard for the Predictive Water
 Quality Monitoring project (Industrial Engineering track).
 
@@ -10,22 +10,23 @@ Quality Monitoring project (Industrial Engineering track).
 ## 1. What was implemented
 
 A read-only, bilingual (English / Arabic, RTL-aware) Streamlit dashboard that
-consumes the ML pipeline's export files and presents six views: Overview,
-Parameter detail, Forecast, Anomalies & alerts, Model health, and Data &
-methodology. It is fully decoupled from the ML code — it imports **no** module
+consumes the ML pipeline's export files and currently presents five views:
+Overview, Parameter detail, Anomalies & alerts, Model monitoring, and Data &
+methodology. Forecast remains implemented but is inserted into navigation only
+when a valid exported forecast exists. It is fully decoupled from the ML code — it imports **no** module
 from `src/` and reads **no** model pickle. New parameters are discovered
 dynamically from the exports directory.
 
 Key properties:
 - **Design system**: centralised tokens (`config/theme.py` + `assets/theme.css`),
-  restrained operations-console look, consistent chart grammar (actual / predicted /
-  forecast / anomaly / reference / gaps).
+  restrained operations-console look, consistent chart grammar (measured /
+  predicted / forecast / anomaly / gaps).
 - **Robust by construction**: missing files, empty files, corrupt JSON lines,
-  null/optional fields, bad timestamps, duplicates and out-of-order records are
+  null/optional fields, bad timestamps, exact/conflicting duplicates and out-of-order records are
   all handled without crashing; one bad parameter never takes down the app.
 - **Scientifically conservative**: no invented thresholds; generalist framing
-  with no drinking-water verdict; forecast/R²/drift shown only if the data
-  exists; WQI confined to the methodology page with full caveats.
+  with no drinking-water verdict; optional null fields are omitted; no model
+  health class is inferred; WQI is confined to Methodology with full caveats.
 
 ## 2. Architecture
 
@@ -35,7 +36,7 @@ app.py ── discovery ─┐
 config/ i18n/ ───────┤        │
 models/ (schemas) ───┘        ▼
 components/ (charts, layout, shap, format)  ← pure presentation
-views/ (6 pages)  ← compose components from an immutable AppContext
+views/ (5 visible + 1 data-gated)  ← compose components from an immutable AppContext
 ```
 
 Strict separation: **loaders** (I/O) → **validation** (cleaning) → **schemas**
@@ -78,10 +79,12 @@ No ML pipeline file was changed. (`.venv/` was already ignored.)
 | Streamlit + Plotly + Pandas | Matches the concept note's named tools and the repo's Python/open-source convention; no second frontend framework. |
 | Read exports only, never `src/` | Keeps the dashboard deployable on a separate machine; ML pipeline stays untouched and stable. |
 | Tokenised design + native theme in `config.toml` | Interface stays intentional even if the injected CSS is disabled/unsupported. |
-| Forecast view wired but empty | `MonitorResult.forecast` is not serialised by the exporter; showing nothing beats fabricating. Code activates automatically if a `forecast` field appears. |
-| WQI on methodology page only | It uses drinking-water standards with heavy documented limitations and is not in the live contract; surfaced as a historical diagnostic, not a verdict. |
-| `water_use_profile` gate | Lets a future approved deployment relabel documented reference values without inventing new ones. |
-| Freshness heuristic from data cadence | No SLA exists in the repo; a self-calibrating, clearly-documented UI heuristic avoids inventing a threshold. |
+| Forecast navigation data-gated | `MonitorResult.forecast` is not serialised by the current exporter. The view code remains ready and navigation activates automatically when valid forecast predictions appear. |
+| WQI on methodology page only | It uses drinking-water standards with heavy documented limitations and is not in the monitoring export contract; surfaced as a historical diagnostic, not a verdict. |
+| Historical source mode | Current research/replay exports show “Historical dataset” and do not trigger a live-sensor freshness warning. A configured continuous mode retains the cadence heuristic for future approved use. |
+| Neutral model monitoring | Status availability and raw metrics are separate from anomaly state and source freshness. No “Healthy” badge exists without an approved classification rule. |
+| Whole-record duplicate policy | Exact rows are removed; conflicting same-timestamp rows keep the last source record. Fields are never merged, so missing measurements are never filled from predictions. |
+| Methodology-only references | Drinking-water WQI standards remain documented, but operational charts contain no WQI-derived reference or alert line. |
 
 ## 6. Tests run and results
 
@@ -90,46 +93,36 @@ Command (from repo root):
 .venv/Scripts/python -m pytest dashboard/tests -q
 ```
 
-**Result: 51 passed** (2.4 s). Breakdown:
+**Latest automated result: 63 passed in 5.55 s.** Coverage includes discovery,
+valid/malformed/empty/missing exports, null status optionals, duplicate and
+out-of-order records, single and consecutive measured-value gaps, no
+measured/predicted substitution, chart naming/tooltips/dashes, anomaly marker
+positions, affected-parameter anomaly counts, source-aware freshness, Forecast
+navigation gating, WQI confinement, and all visible EN/AR views.
 
-| File | Tests | Covers |
-|------|-------|--------|
-| `test_schemas.py` | 11 | float/bool/timestamp coercion, SHAP parse, record/status/forecast parsing, bad ints, insufficient-data |
-| `test_validation.py` | 4 | dedupe, retention (keeps undated), sort (undated last), full pipeline |
-| `test_discovery.py` | 5 | discovery, ignores status/tmp/subdirs, missing/empty dir, status-only |
-| `test_loaders.py` | 9 | valid/corrupt/missing/empty JSONL, status valid/missing/malformed, integration, missing-status |
-| `test_transforms.py` | 10 | trend, freshness (fresh/stale/unknown), anomaly list/state, health tokens, counts |
-| `test_charts.py` | 6 | actual-vs-predicted (EN/AR/empty), forecast None vs present, WQI bar |
-| `test_smoke.py` | 6 | AppTest end-to-end: real exports, empty dir, missing dir, all 6 views on messy data, Arabic RTL, forecast empty state |
-
-**Live run**: `streamlit run dashboard/app.py` served HTTP 200 and rendered the
-real `exports/EC.jsonl` — anomaly (769 µS/cm), trend +580.83, prediction, 30-day
-skill, freshness and health all sourced from the live files. A headless
-`AppTest` pass confirmed all six views render without exception against the real
-exports in both English and Arabic.
-
-> Screenshots could not be captured in this environment (the browser pane was
-> not compositing frames); verification was done via the live HTTP server,
-> page-text extraction, and the AppTest harness.
+The final live-browser review is performed against the repository's real EC
+exports using the documented local command. Runtime URL and final verification
+results are reported in the task handoff rather than asserted here permanently.
 
 ## 7. Known limitations
 
-- **Only EC has live exports today.** pH and Turbidity have frozen models but no
+- **Only EC has monitoring exports today.** pH and Turbidity have frozen models but no
   `.jsonl` yet; they will appear automatically once their `monitor` runs.
-- **No forecast data** in the current export contract → Forecast view shows an
-  empty state.
-- **No R² / drift status** exported → shown as `—`.
+- **No forecast data** in the current export contract → Forecast navigation is hidden.
+- **No R² / drift status** exported; unavailable optional fields are omitted.
+- The EC file contains repeated historical/replay runs in tight succession,
+  producing sharp measured-value alternation despite unique timestamps.
 - Single site, single year of data (C-1). WQI is a drinking-water historical
-  diagnostic only.
+  diagnostic only and is not a water-safety verdict.
 - No authentication (local MVP).
 
 ## 8. Remaining work (priority order)
 
-1. **(Optional, small) Persist forecasts** — add `result.forecast` to
-   `_result_to_record()` in `src/monitor/export.py` (additive, ~4 lines) so the
-   Forecast view populates. Documented but not done to avoid touching the pipeline.
+1. Define and implement an approved additive forecast export contract in the ML
+   pipeline as a separately reviewed task; the dashboard will then enable its view.
 2. Generate pH / Turbidity exports (run `monitor` for them) to see multi-parameter
    overview with real data.
 3. Optional acknowledgment layer (if the read-only decision changes).
 4. Deployment target + auth once chosen.
-5. Accuracy-by-horizon panel once forecast history is exported.
+5. Approve continuous-source freshness SLA and model-health classification rules
+   before enabling live alert/status semantics.

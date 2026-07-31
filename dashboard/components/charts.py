@@ -3,12 +3,11 @@ charts.py — Plotly chart builders with a fixed visual grammar.
 
 The same concept always looks the same across the dashboard:
 
-  • Actual measurements   → solid slate line + markers
+  • Measured values       → solid slate line + markers
   • Model prediction      → teal dashed line
   • Forecast              → blue dotted line
   • Forecast interval     → subtle blue uncertainty band
   • Anomalies             → red diamond markers
-  • Reference limits      → amber dashed horizontal line
   • Missing values        → gaps (connectgaps=False), never interpolated
 
 These functions return plotly Figures and import no Streamlit, so they can be
@@ -19,10 +18,11 @@ from __future__ import annotations
 
 import plotly.graph_objects as go
 
-from dashboard.config import reference_limits as refs
+from dashboard.components.format import DASH, fmt_number
 from dashboard.config.theme import CHART, COLOR, plotly_layout
 from dashboard.i18n.translator import Translator
 from dashboard.models.schemas import ParameterData
+from dashboard.services.validation import resolve_duplicate_timestamps, sort_by_time
 from dashboard.services.wqi import WqiDiagnostic
 
 # Class colours mirror src/data/compute_wqi.py so the diagnostic reads the same
@@ -37,47 +37,61 @@ _WQI_CLASS_COLORS = {
 
 
 def _dated(pdata: ParameterData):
-    return [r for r in pdata.records if r.timestamp is not None]
+    records = resolve_duplicate_timestamps(pdata.records)
+    return [r for r in sort_by_time(records) if r.timestamp is not None]
 
 
 def actual_vs_predicted(
     pdata: ParameterData,
     tr: Translator,
-    *,
-    water_use_profile: str = "generalist",
-    show_reference: bool = True,
 ) -> go.Figure:
-    """Time series of actual vs predicted with anomaly markers and reference line."""
+    """Measured vs predicted time series with explicit gaps and anomaly markers."""
     fig = go.Figure()
     dated = _dated(pdata)
     unit = pdata.display_unit
 
     if dated:
         x = [r.timestamp for r in dated]
+        customdata = [
+            [
+                _tooltip_value(r.actual_value, unit),
+                _tooltip_value(r.predicted_value, unit),
+                _anomaly_label(r.is_anomaly, tr),
+            ]
+            for r in dated
+        ]
+        hover = (
+            f'<b>{tr.t("timestamp")}</b>: %{{x|%Y-%m-%d %H:%M:%S}}<br>'
+            f'<b>{tr.t("measured_series")}</b>: %{{customdata[0]}}<br>'
+            f'<b>{tr.t("predicted_series")}</b>: %{{customdata[1]}}<br>'
+            f'<b>{tr.t("anomaly_state")}</b>: %{{customdata[2]}}<extra></extra>'
+        )
 
-        # Prediction (drawn first, sits under the actual line).
+        # Prediction (drawn first, sits under the measured line).
         fig.add_trace(
             go.Scatter(
                 x=x,
                 y=[r.predicted_value for r in dated],
-                name=tr.t("latest_predicted"),
+                customdata=customdata,
+                name=tr.t("predicted_series"),
                 mode="lines",
                 line=dict(color=CHART["predicted_color"], width=2, dash=CHART["predicted_dash"]),
                 connectgaps=False,
-                hovertemplate="%{y:.2f}<extra>" + tr.t("latest_predicted") + "</extra>",
+                hovertemplate=hover,
             )
         )
-        # Actual measurements.
+        # Measured values. Nulls remain in y so Plotly preserves visible gaps.
         fig.add_trace(
             go.Scatter(
                 x=x,
                 y=[r.actual_value for r in dated],
-                name=tr.t("latest_actual"),
+                customdata=customdata,
+                name=tr.t("measured_series"),
                 mode="lines+markers",
                 line=dict(color=CHART["actual_color"], width=1.8),
                 marker=dict(size=5, color=CHART["actual_color"]),
                 connectgaps=False,
-                hovertemplate="%{y:.2f}<extra>" + tr.t("latest_actual") + "</extra>",
+                hovertemplate=hover,
             )
         )
         # Anomaly markers on the measured value.
@@ -87,6 +101,14 @@ def actual_vs_predicted(
                 go.Scatter(
                     x=[r.timestamp for r in anomalies],
                     y=[r.actual_value for r in anomalies],
+                    customdata=[
+                        [
+                            _tooltip_value(r.actual_value, unit),
+                            _tooltip_value(r.predicted_value, unit),
+                            tr.t("anomaly"),
+                        ]
+                        for r in anomalies
+                    ],
                     name=tr.t("anomaly"),
                     mode="markers",
                     marker=dict(
@@ -95,25 +117,29 @@ def actual_vs_predicted(
                         color=CHART["anomaly_color"],
                         line=dict(width=1, color="#ffffff"),
                     ),
-                    hovertemplate="%{y:.2f}<extra>" + tr.t("anomaly") + "</extra>",
+                    hovertemplate=hover,
                 )
-            )
-
-    # Documented reference line(s).
-    if show_reference:
-        for line in refs.reference_lines(pdata.name, water_use_profile):
-            fig.add_hline(
-                y=line.value,
-                line=dict(color=CHART["limit_color"], width=1.2, dash="dash"),
-                annotation_text=f"{tr.t('reference_line')} · {line.value:g} {unit}".strip(),
-                annotation_position="top left" if not tr.is_rtl else "top right",
-                annotation_font=dict(size=10, color=COLOR["warn"]),
             )
 
     layout = plotly_layout(CHART["height_detail"], rtl=tr.is_rtl)
     layout["yaxis"]["title"] = {"text": unit, "font": {"size": 11}}
     fig.update_layout(**layout)
     return fig
+
+
+def _tooltip_value(value: float | None, unit: str) -> str:
+    """Format one tooltip value without ever borrowing from another series."""
+    if value is None:
+        return DASH
+    return f"{fmt_number(value)} {unit}".strip()
+
+
+def _anomaly_label(value: bool | None, tr: Translator) -> str:
+    if value is True:
+        return tr.t("anomaly")
+    if value is False:
+        return tr.t("normal")
+    return tr.t("unknown")
 
 
 def sparkline(pdata: ParameterData) -> go.Figure:

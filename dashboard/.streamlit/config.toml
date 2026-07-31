@@ -15,3 +15,8 @@ runOnSave = true
 
 [browser]
 gatherUsageStats = false
+
+[client]
+# Supported Streamlit setting: retain the menu/accessibility controls while
+# removing development-oriented toolbar emphasis in review/demo sessions.
+toolbarMode = "minimal"

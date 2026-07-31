@@ -49,7 +49,7 @@ Field order and types exactly as emitted by `_result_to_record()`:
 **Not present in the contract:** there is **no `forecast` field** and **no `R²`**.
 `MonitorResult.forecast` is computed but dropped by `_result_to_record()`. The
 dashboard treats `forecast` as an **optional** record field (code-ready) and
-renders a forecast only if a future export includes it.
+adds Forecast navigation only if a future export includes valid predictions.
 
 Retention: the pipeline purges lines older than
 `system_config.json → exports.retention_days` (default **30**) on every write,
@@ -91,8 +91,8 @@ Exactly as assembled by `write_status_export()`:
 | `n_measurements` | integer | no | Records with both predicted & actual. |
 | `insufficient_data` | boolean | optional | `true` (with null metrics) when `< 10` measurements. |
 
-There is **no `r2` and no `drift_status`** field. The dashboard shows both as
-`—` and never fabricates them.
+There is **no `r2` and no `drift_status`** field. The dashboard omits unavailable
+optional fields and never fabricates them.
 
 ### Real example (`exports/EC_status.json`)
 ```json
@@ -104,7 +104,7 @@ There is **no `r2` and no `drift_status`** field. The dashboard shows both as
 
 ---
 
-## 4. WQI (not in the live contract)
+## 4. WQI (not in the monitoring export contract)
 
 WQI is **not** exported. It exists only as static per-row columns in the
 processed training artifact `data/processed/c1_with_wqi.csv`
@@ -115,7 +115,7 @@ only. Absent CSV → the WQI block is omitted (no placeholder).
 
 ---
 
-## 5. Reference values shown on charts (documented, never invented)
+## 5. Methodology-only reference values (documented, never operational)
 
 | Parameter | Reference (Si) | Source |
 |-----------|----------------|--------|
@@ -125,6 +125,8 @@ only. Absent CSV → the WQI block is omitted (no placeholder).
 
 Physical plausibility bounds (`system_config.json`, sensor-validation ranges —
 **not** quality thresholds): pH 0–14, EC 0–5000 µS/cm, Turbidity 0–10000 NTU.
+These values and the WAWQI standards appear only on Data & Methodology. They are
+not drawn on operational monitoring charts and are not alert thresholds.
 
 ---
 
@@ -137,9 +139,25 @@ Physical plausibility bounds (`system_config.json`, sensor-validation ranges —
 | Empty file | empty result, no error |
 | Invalid JSON line | line skipped, counted in `data quality → skipped lines` |
 | Non-dict JSON line | skipped, counted |
-| `null` / missing optional field | coerced to `None`, rendered as `—` |
+| `null` / missing optional field | coerced to `None`; optional UI row/tile omitted |
 | Invalid timestamp | record kept, omitted from the time axis |
-| Duplicate lines | exact duplicates removed |
+| Exact duplicate lines | duplicates removed |
+| Conflicting rows with one timestamp | last complete source row kept; fields never merged |
 | Records out of order | stable chronological sort applied |
+| Missing `actual_value` | remains null; never replaced by prediction; measured chart gap preserved |
 | NaN / Inf number | treated as `None` |
 | One parameter's file corrupt | that parameter degrades; others unaffected |
+
+## 7. Current EC export quality note
+
+The inspected `exports/EC.jsonl` contains 49 valid, chronologically ordered rows
+with 49 unique timestamps: there are no duplicate timestamps. It contains 16
+measured rows and 33 prediction-only rows. Several research/replay runs record
+alternating measured values (`188.1742` and `769.0`) only fractions of a second
+apart; those genuine exported rows explain the closely spaced zigzag pattern.
+The dashboard preserves the records and the null-measurement gaps rather than
+smoothing, substituting, or hiding them.
+
+The default `historical` source mode labels this as a historical dataset and
+disables operational freshness alerts. A future continuous deployment can set
+`WQD_DATA_SOURCE_MODE=continuous` after its cadence/SLA is approved.

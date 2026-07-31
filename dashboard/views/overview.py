@@ -1,9 +1,9 @@
 """
 overview.py — System overview: latest state per parameter at a glance.
 
-Answers, for each monitored parameter: what is the current state, what changed
-vs the previous reading, is anything abnormal, and is the model healthy. Makes
-no drinking-water safety verdict under the generalist profile.
+Answers, for each monitored parameter: what is the current observation, what
+changed vs the previous measured value, and is the latest evaluated record
+abnormal. Model availability and source freshness are kept semantically separate.
 """
 
 from __future__ import annotations
@@ -58,41 +58,44 @@ def _parameter_card(ctx: AppContext, name: str, pdata) -> None:
 
     direction, delta = tx.trend_direction(pdata)
     anom_state = tx.latest_anomaly_state(pdata)
-    fresh = tx.freshness(pdata, now=ctx.now, multiplier=ctx.settings.fresh_multiplier)
-    health = tx.health_token(pdata)
+    fresh = tx.freshness(
+        pdata,
+        now=ctx.now,
+        multiplier=ctx.settings.fresh_multiplier,
+        source_mode=ctx.settings.data_source_mode,
+    )
+    model = tx.model_status(pdata)
 
     anom_status = {"anomaly": "critical", "normal": "ok"}.get(anom_state, "neutral")
     anom_label = {"anomaly": tr.t("anomaly"), "normal": tr.t("normal")}.get(anom_state, tr.t("unknown"))
 
-    st.markdown('<div class="wq-tile" style="margin-bottom:0.8rem;">', unsafe_allow_html=True)
-    # Header row: parameter name + anomaly pill
-    st.markdown(
-        f'<div style="display:flex;justify-content:space-between;align-items:center;">'
-        f'<div style="font-weight:640;font-size:1.02rem;color:var(--wq-ink);">{name}</div>'
-        f'{layout.status_pill(anom_label, anom_status)}</div>',
-        unsafe_allow_html=True,
-    )
-    # Big current value
-    st.markdown(
-        f'<div class="wq-tile-value" style="margin-top:0.3rem;">{fmt_value(actual_val, unit)}</div>',
-        unsafe_allow_html=True,
-    )
-    # Trend + predicted + freshness line
     trend_txt = f'{TREND_GLYPH.get(direction, DASH)} {fmt_signed(delta, unit)}' if delta is not None else DASH
-    st.markdown(
+    if fresh.state == "historical":
+        source_text = tr.t("historical_dataset")
+    else:
+        fresh_label = {"fresh": tr.t("fresh"), "stale": tr.t("stale")}.get(
+            fresh.state, tr.t("unknown")
+        )
+        source_text = f"{fmt_age(fresh.age_seconds, tr)} · {fresh_label}"
+    model_label = (
+        tr.t("model_active") if model == "active" else tr.t("model_unavailable")
+    )
+
+    # A single HTML fragment avoids the empty Streamlit blocks produced when an
+    # opening and closing card tag are emitted by separate markdown calls.
+    html = (
+        '<div class="wq-tile" style="margin-bottom:0.8rem;">'
+        '<div style="display:flex;justify-content:space-between;align-items:center;">'
+        f'<div style="font-weight:640;font-size:1.02rem;color:var(--wq-ink);">{name}</div>'
+        f'{layout.status_pill(anom_label, anom_status)}</div>'
+        f'<div class="wq-tile-value" dir="ltr" style="margin-top:0.3rem;">{fmt_value(actual_val, unit)}</div>'
         f'<div class="wq-tile-sub">{tr.t("trend")}: {trend_txt}</div>'
         f'<div class="wq-tile-sub">{tr.t("latest_predicted")}: {fmt_value(pred_val, unit)}</div>'
-        f'<div class="wq-tile-sub">{tr.t("data_freshness")}: '
-        f'{fmt_age(fresh.age_seconds, tr)} · {tr.t("model_health")}: '
-        f'{layout.status_pill(_health_label(health, tr), health)}</div>',
+        f'<div class="wq-tile-sub">{tr.t("data_status")}: {source_text}</div>'
+        f'<div class="wq-tile-sub">{tr.t("model_health")}: {model_label}</div>'
+        '</div>'
+    )
+    st.markdown(
+        html,
         unsafe_allow_html=True,
     )
-    st.markdown("</div>", unsafe_allow_html=True)
-
-
-def _health_label(token: str, tr) -> str:
-    return {
-        "ok": tr.t("health_ok"),
-        "warn": tr.t("health_warn"),
-        "critical": tr.t("health_critical"),
-    }.get(token, tr.t("health_unknown"))

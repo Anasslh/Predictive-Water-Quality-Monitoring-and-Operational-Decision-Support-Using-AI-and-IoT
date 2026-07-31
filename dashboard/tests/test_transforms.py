@@ -1,4 +1,4 @@
-"""Transform tests: trend, freshness, anomalies, health token."""
+"""Transform tests: trend, source freshness, anomalies and model availability."""
 
 from __future__ import annotations
 
@@ -64,32 +64,64 @@ def test_freshness_unknown_single_record():
     assert tx.freshness(pdata, now=now).state == "unknown"
 
 
-def test_health_token_ok(exports_dir):
+def test_historical_mode_disables_freshness_alert_semantics(exports_dir):
     pdata = load_parameter("EC", exports_dir, retention_days=3650)
-    assert tx.health_token(pdata) == "ok"
+    far_future = datetime(2036, 7, 20, tzinfo=timezone.utc)
+    result = tx.freshness(pdata, now=far_future, source_mode="historical")
+    assert result.state == "historical"
+    assert tx.system_freshness(
+        {"EC": pdata}, source_mode="historical"
+    ) == "historical"
 
 
-def test_health_token_critical_on_pending():
+def test_model_status_active_does_not_classify_pending_review():
     status = StatusSnapshot(parameter_name="EC", pending_approvals=1)
     pdata = ParameterData(name="EC", unit="", records=[], status=status)
-    assert tx.health_token(pdata) == "critical"
+    assert tx.model_status(pdata) == "active"
 
 
-def test_health_token_warn_on_negative_skill():
+def test_model_status_active_does_not_classify_negative_skill():
     status = StatusSnapshot(
         parameter_name="EC",
         performance=Performance30d(skill_vs_persistence_pct=-5.0, n_measurements=20),
     )
     pdata = ParameterData(name="EC", unit="", records=[], status=status)
-    assert tx.health_token(pdata) == "warn"
+    assert tx.model_status(pdata) == "active"
 
 
-def test_health_token_neutral_without_status():
+def test_model_status_unavailable_without_status():
     pdata = ParameterData(name="EC", unit="", records=[])
-    assert tx.health_token(pdata) == "neutral"
+    assert tx.model_status(pdata) == "unavailable"
 
 
 def test_count_helpers(exports_dir):
     params = {"EC": load_parameter("EC", exports_dir, retention_days=3650)}
     assert tx.count_active_anomalies(params) == 1
     assert tx.count_pending_reviews(params) == 0
+
+
+def test_anomaly_count_means_affected_parameters_not_records():
+    t = datetime(2026, 7, 20, tzinfo=timezone.utc)
+    pdata = ParameterData(
+        name="EC",
+        unit="",
+        records=[
+            _rec(t, actual=1.0, pred=0.0, is_anom=True),
+            _rec(t + timedelta(hours=1), actual=2.0, pred=0.0, is_anom=True),
+        ],
+    )
+    assert len(tx.anomaly_records(pdata)) == 2
+    assert tx.count_active_anomalies({"EC": pdata}) == 1
+
+
+def test_forecast_availability_requires_valid_predictions():
+    t = datetime(2026, 7, 20, tzinfo=timezone.utc)
+    absent = ParameterData(name="EC", unit="", records=[_rec(t, pred=1.0)])
+    assert tx.has_forecast_data({"EC": absent}) is False
+
+    from dashboard.models.schemas import ForecastBlock
+
+    with_forecast = _rec(t, pred=1.0)
+    with_forecast.forecast = ForecastBlock(predictions=[1.1, 1.2])
+    present = ParameterData(name="EC", unit="", records=[with_forecast])
+    assert tx.has_forecast_data({"EC": present}) is True

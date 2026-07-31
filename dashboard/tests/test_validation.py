@@ -8,6 +8,7 @@ from dashboard.models.schemas import MeasurementRecord
 from dashboard.services.validation import (
     clean_records,
     dedupe,
+    resolve_duplicate_timestamps,
     sort_by_time,
     within_retention,
 )
@@ -58,3 +59,28 @@ def test_clean_records_pipeline():
     out = clean_records(recs, retention_days=30, now=now)
     assert len(out) == 1
     assert out[0].timestamp == t_recent
+
+
+def test_duplicate_timestamp_keeps_last_whole_record_without_field_merge():
+    t = datetime(2026, 7, 20, tzinfo=timezone.utc)
+    measured = _rec(t, pred=9.0, actual=10.0)
+    prediction_only = _rec(t, pred=20.0, actual=None)
+
+    out = resolve_duplicate_timestamps([measured, prediction_only])
+
+    assert out == [prediction_only]
+    assert out[0].actual_value is None
+    assert out[0].predicted_value == 20.0
+
+
+def test_clean_records_sorts_out_of_order_and_resolves_duplicate_timestamp():
+    t1 = datetime(2026, 7, 20, tzinfo=timezone.utc)
+    t2 = t1 + timedelta(days=1)
+    first_t1 = _rec(t1, pred=1.0, actual=1.0)
+    last_t1 = _rec(t1, pred=2.0, actual=None)
+
+    out = clean_records([_rec(t2), first_t1, last_t1], retention_days=0)
+
+    assert [r.timestamp for r in out] == [t1, t2]
+    assert out[0] is last_t1
+    assert out[0].actual_value is None

@@ -55,31 +55,44 @@ def page_header(
     freshness_state: str,
     last_update: str,
 ) -> None:
-    """Global header band: title, site, last update, freshness pill."""
+    """Global header band: title, source, last update and source-state pill."""
     fg, bg = status_colors(
-        {"fresh": "ok", "stale": "warn", "unknown": "neutral"}.get(freshness_state, "neutral")
+        {"fresh": "ok", "stale": "warn"}.get(freshness_state, "neutral")
     )
-    fresh_label = {"fresh": tr.t("fresh"), "stale": tr.t("stale")}.get(
-        freshness_state, tr.t("unknown")
+    fresh_label = {
+        "fresh": tr.t("fresh"),
+        "stale": tr.t("stale"),
+        "historical": tr.t("historical_dataset"),
+    }.get(freshness_state, tr.t("unknown"))
+    # Neutral data-source qualifier — makes clear this is not a live IoT feed
+    # unless the deployment sets a real site descriptor via WQD_DATA_SOURCE_NOTE.
+    default_note = (
+        tr.t("source_historical")
+        if settings.data_source_mode == "historical"
+        else tr.t("source_continuous")
     )
+    source_note = settings.data_source_note or default_note
     st.markdown(
-        f"""
-        <div class="wq-header">
-          <div class="wq-header-main">
-            <div class="wq-header-title">{tr.t('app_title')}</div>
-            <div class="wq-header-sub">{tr.t('app_subtitle')}</div>
-          </div>
-          <div class="wq-header-meta">
-            <div class="wq-meta-item"><span class="wq-meta-k">{tr.t('site')}</span>
-              <span class="wq-meta-v">{settings.site_name}</span></div>
-            <div class="wq-meta-item"><span class="wq-meta-k">{tr.t('last_update')}</span>
-              <span class="wq-meta-v">{last_update}</span></div>
-            <div class="wq-meta-item">
-              <span class="wq-pill" style="color:{fg};background:{bg};">&#9679; {fresh_label}</span>
-            </div>
-          </div>
-        </div>
-        """,
+        '<div class="wq-header">'
+        '<div class="wq-header-main">'
+        f'<div class="wq-header-title">{tr.t("app_title")}</div>'
+        f'<div class="wq-header-sub">{tr.t("app_subtitle")}</div>'
+        '</div>'
+        '<div class="wq-header-meta">'
+        '<div class="wq-meta-item">'
+        f'<span class="wq-meta-k">{tr.t("data_source")}</span>'
+        f'<span class="wq-meta-v">{settings.site_name}</span>'
+        f'<span class="wq-meta-note">{source_note}</span>'
+        '</div>'
+        '<div class="wq-meta-item">'
+        f'<span class="wq-meta-k">{tr.t("last_update")}</span>'
+        f'<span class="wq-meta-v">{last_update}</span>'
+        '</div>'
+        '<div class="wq-meta-item">'
+        f'<span class="wq-pill" style="color:{fg};background:{bg};">&#9679; {fresh_label}</span>'
+        '</div>'
+        '</div>'
+        '</div>',
         unsafe_allow_html=True,
     )
 
@@ -119,7 +132,7 @@ def kpi_tile(
         f"""
         <div class="wq-tile" style="{accent}">
           <div class="wq-tile-label">{label}</div>
-          <div class="wq-tile-value">{value}</div>
+          <div class="wq-tile-value" dir="auto">{value}</div>
           {sub_html}
         </div>
         """,
@@ -129,10 +142,13 @@ def kpi_tile(
 
 def kv_table(rows: list[tuple[str, str]]) -> None:
     """Render a compact key/value definition table."""
+    visible_rows = [(k, v) for k, v in rows if v not in (None, "", DASH)]
+    if not visible_rows:
+        return
     body = "".join(
         f'<div class="wq-kv-row"><div class="wq-kv-k">{k}</div>'
-        f'<div class="wq-kv-v">{v if v else DASH}</div></div>'
-        for k, v in rows
+        f'<div class="wq-kv-v" dir="auto">{v}</div></div>'
+        for k, v in visible_rows
     )
     st.markdown(f'<div class="wq-kv">{body}</div>', unsafe_allow_html=True)
 

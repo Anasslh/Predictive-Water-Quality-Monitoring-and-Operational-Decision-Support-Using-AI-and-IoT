@@ -11,14 +11,11 @@ exists in the repository, with its provenance attached:
         BIS IS 10500:2012 / WHO 2022 drinking-water reference standards used to
         build the Weighted Arithmetic WQI. Cited in wqi_methodology.txt.
 
-Display rules
--------------
-Under the default "generalist" water-use profile the dashboard shows these lines
-as neutral *reference* markers with their source, and makes NO safe/unsafe
-verdict. The ``water_use_profile`` gate exists so a future, explicitly-approved
-drinking or irrigation deployment can relabel them — it never fabricates new
-numbers. If a parameter has no documented reference, it simply has none; the
-chart shows the series without a reference line rather than inventing one.
+Display rule
+------------
+The drinking-water WAWQI values are exposed on the Data & Methodology page only.
+They are never used as operational chart limits, anomaly thresholds, or safety
+classifications. Physical plausibility bounds remain documentation only as well.
 """
 
 from __future__ import annotations
@@ -68,13 +65,11 @@ _PLAUSIBILITY_BOUNDS: dict[str, tuple[float, float]] = {
 
 def reference_lines(parameter: str, water_use_profile: str = "generalist") -> list[ReferenceLine]:
     """
-    Return the documented reference lines to draw for a parameter.
+    Return documented WAWQI references for methodology presentation only.
 
-    Only the WAWQI Si standard is drawn on the trend chart (a single, meaningful
-    reference). Physical plausibility bounds are intentionally not drawn as chart
-    limits — they are wide sensor ranges, not quality references — but are exposed
-    via ``plausibility_bounds`` for the methodology page. Returns an empty list
-    when no documented reference exists for the parameter.
+    Operational charts deliberately do not call this function. Physical
+    plausibility bounds are wide sensor ranges, not quality references, and are
+    exposed separately via ``plausibility_bounds``.
     """
     line = _WAWQI_STANDARDS.get(parameter)
     return [line] if line is not None else []

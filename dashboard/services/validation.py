@@ -7,8 +7,10 @@ mutate their inputs.
 
 Cleaning pipeline (clean_records):
     1. dedupe    — drop byte-identical duplicate records
-    2. retention — keep only records within the rolling window
-    3. sort      — stable chronological order, undated records last
+    2. timestamps — for conflicting records at one timestamp, keep the last
+                    complete source record (never merge fields across records)
+    3. retention — keep only records within the rolling window
+    4. sort      — stable chronological order, undated records last
 """
 
 from __future__ import annotations
@@ -23,7 +25,16 @@ def _key(rec: MeasurementRecord) -> tuple:
     shap = tuple(
         (f.feature, f.shap_value, f.direction) for f in rec.shap_top_features
     )
+    forecast = None
+    if rec.forecast is not None:
+        forecast = (
+            tuple(rec.forecast.predictions),
+            tuple(rec.forecast.lower),
+            tuple(rec.forecast.upper),
+            rec.forecast.step_hours,
+        )
     return (
+        rec.parameter_name,
         rec.timestamp,
         rec.predicted_value,
         rec.actual_value,
@@ -31,6 +42,7 @@ def _key(rec: MeasurementRecord) -> tuple:
         rec.anomaly_score,
         rec.retrain_alert,
         shap,
+        forecast,
     )
 
 
@@ -45,6 +57,27 @@ def dedupe(records: list[MeasurementRecord]) -> list[MeasurementRecord]:
         seen.add(k)
         out.append(rec)
     return out
+
+
+def resolve_duplicate_timestamps(
+    records: list[MeasurementRecord],
+) -> list[MeasurementRecord]:
+    """
+    Keep the last source record for each parseable duplicate timestamp.
+
+    A whole record wins; values are never merged across rows. This makes the
+    policy deterministic without substituting a prediction into a missing
+    measurement. Records with no parseable timestamp are retained individually.
+    """
+    seen: set[datetime] = set()
+    kept_reversed: list[MeasurementRecord] = []
+    for rec in reversed(records):
+        if rec.timestamp is not None:
+            if rec.timestamp in seen:
+                continue
+            seen.add(rec.timestamp)
+        kept_reversed.append(rec)
+    return list(reversed(kept_reversed))
 
 
 def within_retention(
@@ -82,5 +115,6 @@ def clean_records(
     retention_days: int,
     now: datetime | None = None,
 ) -> list[MeasurementRecord]:
-    """Full cleaning pipeline: dedupe → retention → sort."""
-    return sort_by_time(within_retention(dedupe(records), retention_days, now))
+    """Full cleaning pipeline: exact dedupe → timestamp policy → retention → sort."""
+    unique = resolve_duplicate_timestamps(dedupe(records))
+    return sort_by_time(within_retention(unique, retention_days, now))

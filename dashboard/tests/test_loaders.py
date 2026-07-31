@@ -73,3 +73,21 @@ def test_load_all_parameters(exports_dir_messy):
     params = load_all_parameters(["EC", "pH"], exports_dir_messy, retention_days=3650)
     assert set(params.keys()) == {"EC", "pH"}
     assert params["EC"].has_records and params["pH"].has_records
+
+
+def test_read_status_accepts_null_optional_fields(tmp_path):
+    path = tmp_path / "EC_status.json"
+    path.write_text(
+        '{"parameter_name":"EC","unit":"µS/cm","model_version":null,'
+        '"last_promoted_at":null,"performance_30d":{"rmse":null,'
+        '"mae":null,"skill_vs_persistence_pct":null,"n_measurements":0},'
+        '"pending_approvals":0,"consecutive_rejections":0}',
+        encoding="utf-8",
+    )
+    status = read_status(path)
+    assert status is not None
+    assert status.model_version is None
+    assert status.last_promoted_at is None
+    assert status.performance.rmse is None
+    assert status.performance.mae is None
+    assert status.performance.r2 is None

@@ -30,7 +30,7 @@
 
 /* ── Streamlit canvas overrides (refinement only) ────────────────────────── */
 .stApp { background: var(--wq-bg); }
-.block-container { padding-top: 1.1rem; padding-bottom: 2.5rem; max-width: 1320px; }
+.block-container { padding-top: 2.75rem; padding-bottom: 2.5rem; max-width: 1320px; }
 html, body, [class*="css"] { font-family: var(--wq-font); color: var(--wq-ink); }
 
 /* Sidebar → deep slate structural rail */
@@ -56,6 +56,7 @@ html, body, [class*="css"] { font-family: var(--wq-font); color: var(--wq-ink); 
 .wq-meta-item { display: flex; flex-direction: column; line-height: 1.25; }
 .wq-meta-k { font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.06em; color: #8ea0af; }
 .wq-meta-v { font-size: 0.85rem; color: #e8edf1; font-weight: 500; }
+.wq-meta-note { font-size: 0.68rem; color: #9fb0be; margin-top: 1px; }
 
 /* ── Status pill ─────────────────────────────────────────────────────────── */
 .wq-pill {
@@ -116,8 +117,33 @@ html, body, [class*="css"] { font-family: var(--wq-font); color: var(--wq-ink); 
   border-top: 1px solid var(--wq-border); }
 
 /* ── Data tables (st.dataframe wrapper tweaks) ───────────────────────────── */
-[data-testid="stDataFrame"] { border: 1px solid var(--wq-border); border-radius: var(--wq-radius); }
+[data-testid="stDataFrame"] {
+  border: 1px solid var(--wq-border);
+  border-radius: var(--wq-radius);
+  direction: ltr; /* keeps technical values/grid geometry intact in Arabic */
+}
 
 /* ── RTL adjustments ─────────────────────────────────────────────────────── */
-.stApp[dir="rtl"] .wq-shap-feat, [dir="rtl"] .wq-shap-feat { direction: ltr; text-align: right; }
-[dir="rtl"] .wq-tile-value, [dir="rtl"] .wq-kv-v { direction: ltr; }
+.wq-shap-feat, .wq-shap-val, .wq-tile-value, .wq-kv-v { unicode-bidi: isolate; }
+
+/* ── Responsive refinement ──────────────────────────────────────────────── */
+@media (max-width: 1100px) {
+  [data-testid="stHorizontalBlock"] { flex-wrap: wrap; }
+  [data-testid="stColumn"] {
+    flex: 1 1 14rem !important;
+    min-width: min(100%, 14rem) !important;
+    width: auto !important;
+  }
+  .wq-header { align-items: flex-start; flex-direction: column; }
+  .wq-header-meta { width: 100%; gap: 0.8rem 1.2rem; }
+}
+
+@media (max-width: 800px) {
+  .block-container { padding-top: 2.5rem; padding-inline: 0.8rem; }
+  .wq-kv-row { align-items: flex-start; flex-wrap: wrap; }
+  .wq-shap-head, .wq-shap-row {
+    grid-template-columns: minmax(7rem, 1.2fr) minmax(5rem, 1fr) 0.7fr 1fr;
+    gap: 0.4rem;
+    padding-inline: 0.55rem;
+  }
+}
