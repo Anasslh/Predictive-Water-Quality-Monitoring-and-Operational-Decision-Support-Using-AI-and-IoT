@@ -1,116 +1,209 @@
 # Predictive Water Quality Monitoring and Operational Decision Support Using AI and IoT
 
-Internship project — SESC, Nile University, Giza. IEEE NILES 2026 paper in preparation.
+A research-grade, configuration-driven system for water-quality prediction, explainability, anomaly detection, model monitoring, human-approved retraining, and operational visualization.
 
----
+Developed as an internship project at the Smart Engineering Systems Center (SESC), Nile University, Giza. An IEEE NILES 2026 paper is in preparation.
 
-## What this system does
+> [!IMPORTANT]
+> This repository is a research prototype. Its current data is historical, not a live IoT feed, and the dashboard does not provide a drinking-water safety or regulatory-compliance verdict.
 
-A config-driven pipeline that trains one independent predictive model per water quality
-parameter (pH, EC, Turbidity), explains every prediction with SHAP feature importance,
-detects anomalies from prediction residuals, and monitors model drift over time with
-automatic retraining gated behind explicit human approval before any model is promoted
-to production. The pipeline is parameter-agnostic: adding a new sensor requires one
-entry in `sensors_config.json` and no code change.
+## Project overview
 
-Designed to run on edge hardware (Raspberry Pi) with a dashboard decoupled and
-deployable on a separate machine.
+The repository contains two decoupled applications:
 
----
+| Component | Purpose | Data access |
+|---|---|---|
+| **ML monitoring pipeline** | Benchmarks and freezes parameter-specific models, produces predictions and SHAP explanations, detects anomalies, evaluates retraining conditions, and computes short-term forecasts. | Reads model/configuration data and appends accepted monitoring rows to the selected historical dataset and export files. |
+| **Streamlit dashboard** | Presents exported measurements, predictions, anomalies, SHAP explanations, and available model-monitoring metrics in English or Arabic. | Read-only; consumes documented exports and never imports model pickle files or writes back to the pipeline. |
 
-## Two ways to use this repo
+The pipeline is parameter-agnostic. Sensors are declared in [`config/sensors_config.json`](config/sensors_config.json), while the dashboard discovers parameters dynamically from the files available in `exports/`.
 
-| Goal | Where to start |
-|------|---------------|
-| **Deploy the pipeline** on a clean machine | [Deployment package](LINK_TO_RELEASE) — 68 files, no research notebooks or evaluation scripts |
-| **Understand the methodology**, decisions, and experiments | Continue reading this README, then browse [`reports/`](#reports--methodological-decisions) |
+## Key capabilities
 
----
+### ML pipeline
 
-## Architecture at a glance
+- Configuration-driven sensor onboarding and time-aware feature engineering
+- Chronological benchmarking of Random Forest, XGBoost, and SVR variants
+- Explicit human selection before a model is frozen
+- Prediction explanations using SHAP feature attributions
+- Residual-based anomaly detection when a measured value is supplied
+- Optional drift and retraining evaluation with human approval before promotion
+- Recursive multi-step forecasting inside the monitoring workflow
+- Atomic rolling JSONL and status exports for external consumers
+
+### Dashboard
+
+- Professional, read-only Streamlit interface
+- Dynamic parameter discovery from monitoring exports
+- Measured-versus-predicted charts with preserved missing-value gaps
+- Red anomaly markers positioned on measured values
+- Record-level anomaly and alert table
+- SHAP explanation panel
+- Neutral model-monitoring metrics without an unsupported health classification
+- English and Arabic localization with right-to-left layout support
+- Historical-data framing and configurable future continuous-source mode
+- Forecast navigation that appears only when valid forecast values are exported
+- Methodology-only historical WQI diagnostic with explicit scientific caveats
+- Graceful handling of missing, null, malformed, incomplete, and duplicate records
+
+## Architecture
 
 ```mermaid
 flowchart LR
-    SC[sensors_config.json] --> OB
-    DS[dataset CSV] --> OB
-    OB["onboard<br/>─ benchmark RF / XGBoost / SVR<br/>─ human selects variant & rank<br/>─ model frozen on confirmation"]
-    OB --> MS["models_store/<br/>frozen model + pointer"]
-    MS --> MO["monitor<br/>─ predict + SHAP<br/>─ anomaly detection<br/>─ retrain check<br/>─ 24h forecast"]
-    MO --> EX["exports/<br/>─ &lt;param&gt;.jsonl  (30-day rolling)<br/>─ &lt;param&gt;_status.json  (skill score, version)"]
-    EX --> DB["external dashboard<br/>(cloud or separate machine)"]
-    MO -->|"retrain candidate<br/>(human approval needed)"| AP["approve<br/>y / n per candidate"]
-    AP --> MS
+    CFG["Sensor and system configuration"] --> ONBOARD["Onboard and benchmark models"]
+    DATA["Historical or incoming measurements"] --> ONBOARD
+    ONBOARD --> REVIEW["Human model selection"]
+    REVIEW --> STORE["Frozen model store"]
+    STORE --> MONITOR["Monitor: predict, explain, detect, evaluate, forecast"]
+    DATA --> MONITOR
+    MONITOR --> EXPORTS["Documented JSONL and status exports"]
+    EXPORTS --> DASH["Read-only Streamlit dashboard"]
+    MONITOR --> CANDIDATE["Retraining candidate"]
+    CANDIDATE --> APPROVAL["Human approval or rejection"]
+    APPROVAL --> STORE
 ```
 
-No model is ever promoted to production automatically. Every retraining candidate
-goes through `run.py approve` before it can replace the current model.
+No retraining candidate is promoted automatically. Promotion requires the explicit approval workflow exposed by `python run.py approve`.
 
----
+## Current data availability
 
-## Quickstart
+The repository currently includes real dashboard export files for **EC only**:
+
+- `exports/EC.jsonl`
+- `exports/EC_status.json`
+
+The dashboard therefore discovers and displays EC. Other configured or modelled parameters do not appear until their own valid export records exist.
+
+Additional constraints of the current export set:
+
+- Forecasts are calculated inside the monitoring pipeline but are not yet serialized into the dashboard export contract. The Forecast page is consequently hidden.
+- Model version, last model update, R², and drift status are not currently available in the supplied exports. Optional null fields are omitted from the interface.
+- The EC records are historical research/replay data and include sharply alternating measurements in tight succession. The dashboard preserves and discloses those values rather than smoothing or replacing them.
+
+## Quick start
+
+### Prerequisites
+
+- Python 3.11 or newer
+- Git
+- A shell capable of running the commands below
+
+Clone the repository and create a virtual environment:
 
 ```bash
-git clone <repo-url>
-cd <repo>
-pip install -r requirements.txt
+git clone https://github.com/Anasslh/Predictive-Water-Quality-Monitoring-and-Operational-Decision-Support-Using-AI-and-IoT.git
+cd Predictive-Water-Quality-Monitoring-and-Operational-Decision-Support-Using-AI-and-IoT
+python -m venv .venv
 ```
 
-### 1 — Declare your sensor in `config/sensors_config.json`
+Activate it:
 
-```json
-{
-  "timestamp_column_candidates": ["Date", "timestamp", "date", "Time"],
-  "sensors": [
-    {
-      "column_name": "EC",
-      "parameter_name": "EC",
-      "unit": "µS/cm",
-      "wqi_standard": 400,
-      "co_variables": ["pH", "Turbidity"],
-      "lag_hours": [24, 48, 72],
-      "rolling_hours": [72, 168]
-    }
-  ]
-}
+```powershell
+# Windows PowerShell
+.venv\Scripts\Activate.ps1
 ```
 
-### 2 — Onboard: benchmark and freeze a model
+```bash
+# macOS / Linux / WSL
+source .venv/bin/activate
+```
 
-**Single-parameter mode** (interactive, freezes immediately after you choose a rank):
+Install the dependencies you need:
+
+```bash
+# ML pipeline
+python -m pip install -r requirements.txt
+
+# Dashboard runtime and tests
+python -m pip install -r dashboard/requirements.txt
+```
+
+The dashboard dependencies are deliberately separate. A dashboard-only deployment does not require scikit-learn, XGBoost, SHAP, or access to model artifacts.
+
+## Run the dashboard
+
+From the repository root:
+
+```bash
+python -m streamlit run dashboard/app.py
+```
+
+Alternatively, use the platform helper:
+
+```powershell
+# Windows PowerShell
+./dashboard/run_dashboard.ps1
+```
+
+```bash
+# macOS / Linux / WSL
+./dashboard/run_dashboard.sh
+```
+
+Open <http://localhost:8501> if the browser does not open automatically.
+
+### Dashboard views
+
+| View | Contents |
+|---|---|
+| **Overview** | Latest measured state, trend, affected-parameter anomaly count, source mode, and model-monitoring availability |
+| **Parameter detail** | Chronological measured and predicted series, preserved gaps, anomaly markers, date filtering, data-quality notes, and SHAP context |
+| **Forecast** | Valid exported multi-step forecasts; automatically absent while the export contract contains none |
+| **Anomalies & alerts** | Record-level table of exported anomaly observations and retraining alerts |
+| **Model monitoring** | Available RMSE, MAE, skill-versus-persistence, counts, and non-null optional metadata |
+| **Data & methodology** | Source description, data policies, known limitations, reference methods, and the historical WQI diagnostic |
+
+### Dashboard configuration
+
+All settings are optional and resolve relative to the repository root by default.
+
+| Environment variable | Default | Purpose |
+|---|---|---|
+| `WQD_EXPORTS_DIR` | `<repo>/exports` | Directory containing `<parameter>.jsonl` and optional status files |
+| `WQD_PROCESSED_DIR` | `<repo>/data/processed` | Location of the processed historical dataset used by the Methodology page |
+| `WQD_SITE_NAME` | `C-1 — Ramgarh Station` | Configurable source label |
+| `WQD_DATA_SOURCE_MODE` | `historical` | `historical` disables live freshness-alert semantics; `continuous` enables the documented cadence heuristic |
+| `WQD_DATA_SOURCE_NOTE` | Translated historical-data label | Optional source qualifier |
+| `WQD_WATER_USE` | `generalist` | Water-use framing profile |
+| `WQD_DEFAULT_LANG` | `en` | Interface language: `en` or `ar` |
+| `WQD_RETENTION_DAYS` | `30` | Expected rolling export window |
+| `WQD_FRESH_MULTIPLIER` | `3.0` | Continuous-mode freshness heuristic multiplier |
+
+Example:
+
+```bash
+WQD_EXPORTS_DIR=/synced/exports WQD_DEFAULT_LANG=ar python -m streamlit run dashboard/app.py
+```
+
+For the exact schema and behavior, see:
+
+- [`dashboard/DATA_CONTRACT.md`](dashboard/DATA_CONTRACT.md)
+- [`dashboard/ASSUMPTIONS.md`](dashboard/ASSUMPTIONS.md)
+- [`dashboard/IMPLEMENTATION_REPORT.md`](dashboard/IMPLEMENTATION_REPORT.md)
+
+## Run the ML pipeline
+
+The unified entry point is `run.py`:
+
+```bash
+python run.py --help
+```
+
+### 1. Onboard and benchmark models
+
+For one parameter:
 
 ```bash
 python run.py onboard --dataset data/processed/c1_with_wqi.csv --parameter EC
 ```
 
-**Batch mode** (benchmarks all sensors in `sensors_config.json` without interruption,
-then saves a pending report for each — nothing is frozen until you run `review`):
+For all configured parameters:
 
 ```bash
 python run.py onboard --all --dataset data/processed/c1_with_wqi.csv
 ```
 
-Batch output example:
-
-```
-══════════════════════════════════════════════════════════════
-  BATCH ONBOARDING COMPLETE — 3 parameter(s)
-══════════════════════════════════════════════════════════════
-  EC          best=60.94 µS/cm    awaiting review
-  pH          best=0.83 pH        awaiting review
-  Turbidity   best=36.23 NTU      awaiting review
-
-  Run 'python run.py review <parameter>' to choose a rank and freeze
-  each model — nothing has been saved to production yet.
-```
-
-Both modes run a grid of 33 model configurations (RF, XGBoost, SVR).
-**No model is saved until a human confirms a rank.**
-
-### 2b — Review a pending batch report and freeze a model
-
-After `onboard --all`, each parameter has a pending benchmark report stored in
-`models_store/<param>/pending_benchmark_reports/`. Run `review` to read the full
-ranking table, choose a rank, and freeze:
+Batch onboarding saves pending benchmark reports without freezing a model. Review each parameter explicitly:
 
 ```bash
 python run.py review EC
@@ -118,351 +211,160 @@ python run.py review pH
 python run.py review Turbidity
 ```
 
-`review` displays the same ranking table as single-parameter `onboard`, asks for a
-variant (`raw` / `log`) and a rank, then freezes the chosen model and archives the
-pending report. Parameters can be reviewed in any order and at any time — the
-pending report is stored persistently across sessions.
+### 2. Process a measurement
 
-### 3 — Monitor: process a new measurement
-
-`monitor` accepts a **raw sensor measurement** (same columns as the onboarding
-dataset: `Date`, `EC`, `pH`, `Turbidity`, …) — not pre-computed features.
-It builds lag/rolling features internally from the historical dataset, runs the
-frozen model, and appends the new raw row back to the historical file so the
-context window self-enriches with each call.
+`monitor` accepts a raw sensor row, reconstructs features from historical context, predicts, explains the prediction, optionally evaluates anomalies and retraining, computes an internal forecast, and updates the monitoring exports.
 
 ```bash
-python run.py monitor \
-  --parameter   EC \
-  --dataset     data/processed/c1_with_wqi.csv \
-  --new-row     data/processed/ec_new_row_example.csv \
-  --actual-value 769
+python run.py monitor --parameter EC --dataset data/processed/c1_with_wqi.csv --new-row data/processed/ec_new_row_example.csv --actual-value 769
 ```
 
-`ec_new_row_example.csv` contains one raw row (2026-01-31, the last date in
-the bundled dataset):
+> [!WARNING]
+> Unlike the dashboard, the monitoring pipeline is not read-only. A successful `monitor` call atomically appends the accepted raw row to the dataset supplied through `--dataset`. Use a copy for demonstrations or experiments.
 
-```
-Date,EC,pH,Turbidity
-2026-01-31,769,6.92,2.35
-```
+Common monitoring options:
 
-**What happens internally (4 stages):**
+| Option | Effect |
+|---|---|
+| `--actual-value <number>` | Supplies the measured value required for residual-based anomaly evaluation |
+| `--check-retrain` | Enables the optional retraining-condition check |
+| `--no-anomaly` | Skips anomaly detection |
+| `--no-forecast` | Skips internal multi-step forecasting |
 
-1. **Validate + predict (always):** The new row is validated against `system_config.json`
-   physical bounds, appended to `--dataset`, features are rebuilt with the same
-   `lag_hours` / `rolling_hours` / `co_variables` from `sensors_config.json`.
-   The last feature row is passed to `model.predict()` + SHAP (top-3 features with
-   direction and magnitude displayed on the console).
-2. **Anomaly detection (on by default):** If `--actual-value` is supplied, the
-   prediction residual is scored by the Isolation Forest detector trained during
-   `onboard` / `review`. Score ≥ 0.5 raises a `⚠ ANOMALY DETECTED` alert.
-   Disable with `--no-anomaly`.
-3. **Retrain check (opt-in):** Disabled by default to keep latency low. Enable with
-   `--check-retrain`; requires ≥ 60 new rows since last training before the drift
-   gate fires.
-4. **Multi-step forecast (on by default):** A recursive 7-step forecast is produced
-   using the forecaster config saved during `onboard` / `review`, giving a D+1 … D+7
-   trajectory with ±σ uncertainty bands (daily data). Disable with `--no-forecast`.
+See [`GUIDE_MONITOR_STAGES.md`](GUIDE_MONITOR_STAGES.md) for the full stage-by-stage workflow.
 
-The result is appended to `exports/EC.jsonl` (rolling 30-day window).
-The new raw row is written back to `--dataset` atomically — the file grows by one
-row after every successful call.
-
-> **`--dataset` grows with each call.** On a real deployment, point it at your
-> live historical CSV so the context window expands automatically.
-
-**Optional flags for `monitor`:**
-
-| Flag | Default | Effect |
-|------|---------|--------|
-| `--actual-value <float>` | — | Enables Stage 2 (anomaly) by providing the true measured value |
-| `--check-retrain` | off | Enable Stage 3 drift check (adds latency) |
-| `--no-anomaly` | off | Skip Stage 2 (anomaly detection) |
-| `--no-forecast` | off | Skip Stage 4 (multi-step forecast) |
-
-See [`GUIDE_MONITOR_STAGES.md`](GUIDE_MONITOR_STAGES.md) for detailed stage descriptions,
-console output examples, and a simplified minimal-mode invocation.
-
-### 4 — Check operational status
+### 3. Inspect status and review retraining candidates
 
 ```bash
-python run.py status                   # all parameters
-python run.py status --parameter EC    # one parameter
+python run.py status
+python run.py status --parameter EC
+python run.py approve
+python run.py approve <approval_id>
+python run.py approve --reject-all-stale
 ```
 
-### 5 — Review and approve retraining candidates
+## Export contract
 
-```bash
-python run.py approve                          # list pending candidates
-python run.py approve <approval_id>            # interactive y/n decision
-python run.py approve --reject-all-stale       # reject candidates older than 7 days
-```
+Each monitored parameter can produce:
 
----
+| File | Purpose |
+|---|---|
+| `exports/<parameter>.jsonl` | Rolling measurement and prediction records, including timestamps, actual and predicted values, SHAP features, anomaly fields, and retraining alerts |
+| `exports/<parameter>_status.json` | Available model metadata, performance metrics, measurement time, and approval/rejection counts |
+
+The dashboard reads only these exports plus the processed WQI artifact used on the Methodology page. It does not import `src/`, load pickles, acknowledge incidents, or modify any export.
+
+### Record and chart policies
+
+- Records are sorted chronologically.
+- Exact duplicates are removed. For conflicting records with one parseable timestamp, the last complete source record wins.
+- Fields from separate duplicate records are never combined.
+- A missing measured value remains missing and is never replaced by a prediction.
+- Measured lines preserve gaps; predicted lines use a distinct dashed style.
+- Anomaly markers are placed only on available measured values.
+- “Parameters with active anomalies” counts affected parameters whose latest evaluated record is anomalous; the alerts table remains record-level.
 
 ## Configuration
 
-### `config/sensors_config.json` — one entry per sensor
+### Sensor configuration
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `timestamp_column_candidates` | string[] | ✓ | Column names tried in order; first parseable monotone-increasing column wins |
-| `column_name` | string | ✓ | Exact column name in the raw CSV |
-| `parameter_name` | string | ✓ | Label used in model filenames, reports, and export files |
-| `unit` | string | ✓ | Physical unit string (e.g. `"µS/cm"`, `"NTU"`, `"pH"`) |
-| `wqi_standard` | number | — | WHO/BIS reference value for WQI computation. **Not consumed by the current pipeline** (prediction, anomaly detection, retraining). Reserved for a future WQI module — include it now so configs stay forward-compatible, but the pipeline ignores it at runtime. |
-| `co_variables` | string[] | — | Other sensor columns to include as lag-1 co-features |
-| `lag_hours` | number[] | — | Lag depths in hours; converted to row count using detected measurement frequency. Default `[24, 48, 72]` |
-| `rolling_hours` | number[] | — | Rolling window durations in hours. Default `[72, 168]` (3-day and 7-day at daily resolution) |
-| `forecast_horizon_hours` | number | — | Total forecast horizon in hours. `n_steps = floor(forecast_horizon_hours / detected_freq_hours)`, minimum 1. **Default: 72** (= 3 steps for daily data, 72 steps for hourly data). Example: `168` gives a 7-day horizon for daily sensors. |
+[`config/sensors_config.json`](config/sensors_config.json) declares timestamp candidates and one object per sensor. The current configuration includes EC, Turbidity, pH, and Temperature.
 
-Adding a new sensor is a single `sensors` array entry. No Python file needs to change.
+Key fields include:
 
-> **Note — one optional step in `system_config.json`:** When adding a new sensor,
-> you typically only need to edit `sensors_config.json`. The one exception is
-> `system_config.json → validation.physical_bounds`: if you want incoming values
-> checked against physical range limits for your new parameter, add an entry there
-> too (`min` / `max` / `unit`). Without it, the pipeline logs a warning and skips
-> range validation for that parameter — it does not fail, but also does not protect
-> against out-of-range sensor glitches.
+| Field | Purpose |
+|---|---|
+| `column_name` | Exact raw-data column |
+| `parameter_name` | Stable parameter identifier used in models, reports, and exports |
+| `unit` | Display and reporting unit |
+| `co_variables` | Optional cross-variable lag features |
+| `lag_hours` | Time-based lag depths converted to row counts at runtime |
+| `rolling_hours` | Time-based rolling-window durations |
+| `forecast_horizon_hours` | Forecast horizon converted to steps using the detected frequency |
+| `wqi_standard` | Reference used by the separate historical WQI methodology; not an operational alert threshold |
 
-### `config/system_config.json` — pipeline tuning constants
+See [`config/README_sensors_config.md`](config/README_sensors_config.md) for the schema reference.
 
-All tunable constants live here. Key sections:
+### System configuration
 
-**`retraining`**
-```json
-{
-  "min_new_rows": 60,
-  "rmse_ratio_threshold": 1.10,
-  "tolerance": 0.02,
-  "rejection_alert_threshold": 3,
-  "max_history_years": 5.0
-}
-```
-- `min_new_rows`: minimum new data rows before a retraining check is triggered (60 ≈ 2 months of daily data).
-- `rmse_ratio_threshold`: retraining fires when recent RMSE exceeds current model RMSE by this factor (1.10 = 10% degradation).
-- `tolerance`: candidate accepted if its RMSE ≤ current RMSE × (1 + tolerance); accommodates XGBoost stochastic variance.
-- `rejection_alert_threshold`: alert fires every N consecutive rejections, prompting a full re-benchmark.
-
-**`anomaly_detection`**
-```json
-{
-  "score_threshold": 0.5,
-  "isolation_forest_contamination": 0.05,
-  "random_state": 42
-}
-```
-Anomaly scores are normalized to [0, 1]; score ≥ `score_threshold` raises a flag.
-
-**`validation.physical_bounds`**
-```json
-{
-  "pH":        {"min": 0.0,  "max": 14.0,    "unit": "pH"},
-  "EC":        {"min": 0.0,  "max": 5000.0,  "unit": "µS/cm"},
-  "Turbidity": {"min": 0.0,  "max": 10000.0, "unit": "NTU"}
-}
-```
-Rows outside these bounds are rejected at ingestion with an explicit reason logged.
-Never silently.
-
-**`exports`**
-```json
-{
-  "exports_dir": "exports",
-  "retention_days": 30
-}
-```
-
-**`logging`**
-```json
-{
-  "log_file": "logs/system.log",
-  "console_level": "INFO",
-  "file_level": "WARNING"
-}
-```
-
----
-
-## Dashboard integration
-
-After each `run.py monitor` call, two files are written atomically to `exports/`:
-
-| File | Contents | Updated |
-|------|----------|---------|
-| `exports/<param>.jsonl` | Rolling 30-day window, one JSON line per measurement. Fields: `timestamp`, `predicted_value`, `actual_value`, `shap_top_features`, `is_anomaly`, `anomaly_score`, `retrain_alert`. | Every measurement |
-| `exports/<param>_status.json` | Model version, last promotion date, 30-day skill score vs. persistence baseline, RMSE, MAE, pending approvals, consecutive rejections. | Every measurement |
-
-**The dashboard only needs these two files per parameter — no access to Python code or
-model pickles.** Copy or sync `exports/` to a separate machine (cloud, internal server)
-and the dashboard operates fully independently.
-
-Example `exports/EC_status.json`:
-```json
-{
-  "parameter_name": "EC",
-  "unit": "µS/cm",
-  "model_version": "xgb_ec_d3_n50_lr001",
-  "last_promoted_at": "2026-07-19T...",
-  "last_measurement_at": "2026-07-22T...",
-  "performance_30d": {
-    "skill_vs_persistence_pct": 20.1,
-    "rmse": 56.4,
-    "mae": 41.2,
-    "n_measurements": 28
-  },
-  "pending_approvals": 0,
-  "consecutive_rejections": 0,
-  "queried_at": "2026-07-22T..."
-}
-```
-
-`skill_vs_persistence_pct` measures how much the model reduces RMSE compared to
-the naive persistence baseline (predict previous value). Positive = model adds value.
-Null if fewer than 10 measurements are in the window (`insufficient_data: true`).
-
-In Python, retrieve both paths for a parameter with:
-```python
-from src.monitor.export import get_dashboard_export_paths
-paths = get_dashboard_export_paths("EC")
-# paths["measurements"] → exports/EC.jsonl
-# paths["status"]       → exports/EC_status.json
-```
-
----
+[`config/system_config.json`](config/system_config.json) centralizes model grids, validation bounds, anomaly settings, retraining policy, export retention, and logging. Current thresholds are engineering or research settings, not regulatory limits.
 
 ## Repository structure
 
-```
-src/
-├── pipeline/       # onboard_new_parameter(), benchmark_models(), submit_benchmark_choice()
-│                   # timestamp auto-detection, model benchmarking (33 configs: RF/XGBoost/SVR)
-├── models/         # ParameterModel abstract base class (base.py); empty ph/ and turbidity/
-│                   # packages ready for parameter-specific overrides if ever needed
-├── data/           # chronological split, input validation (physical bounds check)
-├── xai/            # compute_shap_explanation() — SHAP wrapper, works with any ParameterModel
-├── anomaly/        # Isolation Forest on prediction residuals; ECAnomalyDetector; explain_anomaly()
-├── retraining/     # drift_detector, retrain_manager, approval workflow, model versioning,
-│                   # cli_approve — the full human-in-the-loop retraining cycle
-├── forecasting/    # recursive multi-step forecaster; frequency auto-detection;
-│                   # generic time-aware feature engineering
-└── monitor/        # ParameterMonitor (orchestrates all four stages per measurement);
-                    # rolling JSONL export; status JSON export
+```text
+config/          Sensor declarations and system settings
+dashboard/       Streamlit application, components, services, localization, tests, and technical docs
+data/            Raw, interim, and processed research datasets
+exports/         Dashboard-facing monitoring exports
+models_store/    Frozen models, metadata, reports, and approval state
+reports/         Scientific, methodological, and implementation reports
+src/             Pipeline, models, monitoring, XAI, anomaly, forecasting, and retraining modules
+tests/           Additional repository-level test support
+run.py           Unified command-line entry point
+run_tests.sh     Pipeline test runner
 ```
 
----
+## Testing
 
-## Extending the model grid
-
-RF, XGBoost, and SVR are the three algorithms benchmarked by default
-(`src/pipeline/model_benchmark.py`). Adding a new algorithm (e.g.
-LightGBM, a neural network) requires editing this single file — no
-registry system, but a consistent pattern to follow:
-
-1. Write a `_GenericYourModel(ParameterModel)` class (fit/predict/explain)
-2. Add the import
-3. Add its hyperparameter grid alongside the existing RF/XGBoost/SVR blocks
-4. (Optional) update the descriptive string in `format_benchmark_report()`
-
-No other file needs to change — ranking, reporting, and the raw-vs-log
-comparison are all generic and pick up new algorithms automatically.
-Estimated effort: under 30 minutes for a developer familiar with the
-existing pattern.
-
----
-
-## Tests
-
-Run the full suite (117+ checks across 11 test files — pytest is optional; the suite
-runs without it by default, use `--pytest` flag for verbose pytest output):
+Run pipeline self-tests from Bash, WSL, macOS, or Linux:
 
 ```bash
-bash run_tests.sh
+./run_tests.sh
 ```
 
-All tests create their own temporary directories and do not touch production files.
-The suite covers: rolling JSONL export and 30-day retention, status export skill
-computation, onboarding size guards, atomic write crash-safety (6 scenarios),
-CLI approval flow, retraining rejection counter with sliding window,
-anomaly detector persistence round-trip, and all four monitor stages
-(forecast trajectory, retrain opt-in, parser flag parsing, forecaster config round-trip).
+Run the pipeline tests through pytest:
 
-**Methodological decisions** behind the numbers are documented in `reports/`:
+```bash
+./run_tests.sh --pytest
+```
 
-| Report | Contents |
-|--------|----------|
-| [`reports/rapport_ec_pipeline_complet.md`](reports/rapport_ec_pipeline_complet.md) | Full EC pipeline from raw data to frozen XGBoost — feature engineering iterations, model comparison, seasonal distribution shift diagnosis, SHAP analysis |
-| [`reports/rapport_generalisation_pipeline.md`](reports/rapport_generalisation_pipeline.md) | Generic pipeline validation on all 3 parameters; log-transform counter-example on Turbidity; benchmark results table |
-| [`reports/rapport_module_reentrainement.md`](reports/rapport_module_reentrainement.md) | Drift detection design: three iterated criteria (OR → AND → RMSE-only), KS power analysis at n≈55, two-gate policy calibration |
-| [`reports/week2_report.md`](reports/week2_report.md) | Literature review (6 papers) with methodology matrix |
-| [`reports/methodology_toolbox.md`](reports/methodology_toolbox.md) | Implementation notes and architectural decisions |
-| [`reports/implementation_plan.md`](reports/implementation_plan.md) | Week-by-week plan and scope definition |
+Run the dashboard suite from any supported platform:
 
----
+```bash
+python -m pytest dashboard/tests -q
+```
+
+The dashboard suite covers discovery, valid and malformed JSONL parsing, absent exports and status files, null optional fields, deterministic duplicate handling, chronological transforms, missing measured values, anomaly positions and counts, forecast gating, WQI placement, English rendering, and Arabic RTL rendering.
+
+## Scientific framing and WQI
+
+The dashboard uses general water-monitoring language and does not determine whether water is safe to drink.
+
+The Water Quality Index shown on **Data & methodology** is:
+
+- calculated from the processed historical dataset;
+- outside the live/dashboard monitoring export contract;
+- based on drinking-water reference standards;
+- limited by its available parameters and single-station dataset; and
+- a historical diagnostic, not a live alert, regulatory assessment, or proof of drinking-water safety.
+
+WQI reference values are never used as operational chart limits or anomaly thresholds.
 
 ## Known limitations
 
-- **Single station, one year of data.** All modelling and calibration is based on
-  the C-1 dataset: one monitoring station near Ramgarh, Jharkhand, India, 365 daily
-  rows (February 2025 – January 2026). Generalization to other sites, sensor networks,
-  or sub-daily frequencies has not been tested.
+- **Historical single-station dataset:** Current modelling uses C-1 Ramgarh Station research data covering approximately one year. Generalization to other sites or sampling frequencies is unverified.
+- **No physical IoT deployment:** MQTT, sensor drivers, network resilience, and Raspberry Pi operation have not been validated in this repository.
+- **Only EC has dashboard exports:** Other parameters remain hidden until valid records are produced.
+- **Forecast export gap:** Forecasting exists internally but is not yet part of the dashboard export schema.
+- **No approved model-health classification:** Available metrics are displayed neutrally without a green “healthy” verdict.
+- **No authentication or operator write-back:** The dashboard does not implement accounts, acknowledgements, or incident management.
+- **Dataset shift and limited calibration:** Seasonal distribution shift and the limited sample size affect evaluation and drift diagnostics; see the reports below.
+- **Engineering bounds are not regulatory thresholds:** Physical validation bounds and anomaly defaults must be reviewed for any new site or operational use.
 
-- **Not yet deployed on physical hardware.** The system is designed for Raspberry Pi
-  edge deployment but has only been validated on x86/WSL. No real-time IoT integration
-  (MQTT, sensor drivers) is included.
+## Reports and further documentation
 
-- **Seasonal distribution shift.** The single-year dataset has a structural train/test
-  distribution gap (high-variability monsoon season in train, calmer dry season in test).
-  This depresses R² metrics and inflates relative RMSE on test — documented in the EC
-  and Turbidity reports.
+| Document | Contents |
+|---|---|
+| [`reports/rapport_ec_pipeline_complet.md`](reports/rapport_ec_pipeline_complet.md) | EC pipeline, feature engineering, model comparison, distribution-shift diagnosis, and SHAP analysis |
+| [`reports/rapport_generalisation_pipeline.md`](reports/rapport_generalisation_pipeline.md) | Generic pipeline validation across parameters |
+| [`reports/rapport_module_reentrainement.md`](reports/rapport_module_reentrainement.md) | Drift detection and human-approved retraining policy |
+| [`reports/week2_report.md`](reports/week2_report.md) | Literature review and methodology matrix |
+| [`reports/methodology_toolbox.md`](reports/methodology_toolbox.md) | Implementation notes and architecture decisions |
+| [`reports/implementation_plan.md`](reports/implementation_plan.md) | Project plan and scope |
+| [`reports/ie_dashboard_progress.md`](reports/ie_dashboard_progress.md) | Dashboard development and review history |
 
-- **pH and Turbidity are less explored than EC.** EC went through multiple feature
-  engineering iterations, Bayesian hyperparameter tuning, and deep anomaly detection
-  calibration. pH and Turbidity were onboarded via the generic pipeline with a
-  standard grid search only.
+## Citation and project status
 
-- **`max_history_years = 5` is theoretical.** The sliding-window policy for
-  long-running deployments is set in `system_config.json` but cannot be validated
-  on a single year of data.
+This is an academic research project developed at SESC, Nile University, Giza. The associated IEEE NILES 2026 paper title and DOI will be added if accepted.
 
-- **KS test has low power at n ≈ 55.** The Kolmogorov–Smirnov drift signal is
-  retained as a diagnostic metric but not used as a decision gate, for this reason
-  (documented in `rapport_module_reentrainement`).
-
-- **The model benchmark grid is configurable but not auto-adaptive.** The
-  hyperparameter search grid (RF / XGBoost / SVR) is declared in
-  `config/system_config.json → model_benchmark`. The defaults were sized for
-  small daily-frequency datasets (~300–500 rows, validated on C-1). Someone
-  working with a much larger or higher-frequency dataset will need to widen
-  `n_estimators`, `max_depth`, and `C` ranges manually — the pipeline does not
-  detect dataset size and adjust the grid automatically.
-
-- **Forecasting and anomaly detection depend on a prior `onboard` / `review` call.**
-  The anomaly detector (Isolation Forest) and the forecaster config are saved
-  automatically when a model is frozen. If `monitor` is called before any model has
-  been onboarded for a parameter, both stages are silently skipped (a warning is
-  logged). Run `onboard` or `review` at least once to enable these stages.
-
-- **Three pipeline constants are engineering defaults, not calibrated values.**
-  `validation.physical_bounds.EC.max = 5000 µS/cm` and
-  `validation.physical_bounds.Turbidity.max = 10000 NTU` are domain-plausible upper
-  bounds (no WHO/BIS citation, no calibration against C-1 observed ranges — C-1 peaks
-  at 170 NTU and the EC maximum is well below 5000 µS/cm). The Turbidity bound is
-  effectively never active on the current dataset. Similarly,
-  `anomaly_detection.isolation_forest_contamination = 0.05` is sklearn's conventional
-  default; the pipeline's custom MinMax normalization makes the anomaly threshold
-  largely independent of this parameter in practice, but the value was not tuned on
-  C-1 data. All three should be revisited when data from additional stations or
-  longer time spans becomes available.
-
----
-
-## License / Citation
-
-Academic project — SESC, Nile University, Giza.
-IEEE NILES 2026 paper forthcoming (title and DOI to be added on acceptance).
-
-If you use this code or pipeline design in your own work, please cite the paper
-once it is published.
+No standalone software license has been declared in this repository. Contact the repository owners before reuse or redistribution beyond review and research purposes.
