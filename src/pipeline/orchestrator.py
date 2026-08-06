@@ -175,12 +175,14 @@ def _prepare_data(
     config: dict,
     df: pd.DataFrame,
     sensor: dict,
-) -> tuple[pd.DataFrame, Any]:
+) -> tuple[pd.DataFrame, Any, str]:
     """
     Detect timestamp column, parse it, detect measurement frequency.
 
-    Returns the cleaned DataFrame (sorted, datetime column) and the
-    detected timedelta frequency.
+    Returns the cleaned DataFrame (sorted, datetime column), the detected
+    timedelta frequency, and the detected timestamp column name.  The column
+    name is returned so callers can pass it through to build_features_time_aware()
+    rather than re-detecting it on every feature-engineering call.
     """
     param    = sensor["parameter_name"]
     col_name = sensor["column_name"]
@@ -200,13 +202,14 @@ def _prepare_data(
     freq_hours = frequency.total_seconds() / 3600.0
     logger.info("[orchestrator] [%s] Measurement frequency: %.1f h", param, freq_hours)
 
-    return df, frequency
+    return df, frequency, ts_col
 
 
 def _build_and_split(
     df: pd.DataFrame,
     sensor: dict,
     frequency: Any,
+    date_col: str = "Date",
 ) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame, pd.Series, pd.DataFrame, pd.Series]:
     """
     Feature engineering → chronological 70/15/15 split.
@@ -214,6 +217,10 @@ def _build_and_split(
     The sensor dict's "parameter_name" field is used as the target column.
     Pass a modified sensor dict (with a different "parameter_name" and
     "column_name") to build features for a log-transformed target.
+
+    date_col : Name of the timestamp column in df (detected by _prepare_data).
+               Passed through to build_features_time_aware so it can sort the
+               DataFrame on the correct column regardless of its name.
 
     Returns X_train, y_train, X_val, y_val, X_test, y_test.
     """
@@ -230,6 +237,7 @@ def _build_and_split(
         lag_hours     = lag_hours,
         rolling_hours = rolling_hours,
         co_variables  = co_variables,
+        date_col      = date_col,
     )
 
     logger.info("[orchestrator] [%s] Splitting chronologically ...", param)
@@ -326,7 +334,7 @@ def onboard_new_parameter(
         )
     df = val_report.valid_df
 
-    df, frequency = _prepare_data(config, df.copy(), sensor)
+    df, frequency, ts_col = _prepare_data(config, df.copy(), sensor)
 
     # ── Noise diagnostic + CV check ────────────────────────────────────────
     noise_diag = quick_noise_diagnostic(df, sensor["column_name"])
@@ -337,7 +345,7 @@ def onboard_new_parameter(
 
     # ── Raw benchmark ──────────────────────────────────────────────────────
     X_train, y_train, X_val, y_val, X_test, y_test = _build_and_split(
-        df, sensor, frequency
+        df, sensor, frequency, date_col=ts_col
     )
 
     # ── Guard 2: post-FE partition sizes ──────────────────────────────────────
@@ -392,7 +400,7 @@ def onboard_new_parameter(
         sensor_log["parameter_name"] = col_log
 
         Xtr_l, ytr_l, Xv_l, yv_l, Xt_l, yt_l = _build_and_split(
-            df_log, sensor_log, frequency
+            df_log, sensor_log, frequency, date_col=ts_col
         )
         y_val_orig = np.expm1(yv_l.values)
 

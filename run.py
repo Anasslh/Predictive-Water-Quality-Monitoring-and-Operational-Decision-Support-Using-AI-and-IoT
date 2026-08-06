@@ -157,6 +157,7 @@ def _save_pending_report(
     models_store: Path,
     frequency: object = None,
     sensor_entry: object = None,
+    ts_col: str = "Date",
 ) -> Path:
     """
     Persist a pending benchmark report to disk.
@@ -170,8 +171,8 @@ def _save_pending_report(
     The .pkl format (not JSON) is required because BenchmarkReport contains
     fitted sklearn/XGBoost objects that are not JSON-serialisable.
 
-    frequency / sensor_entry are optional metadata saved so that 'review'
-    can train and save the forecaster config after the model is frozen.
+    frequency / sensor_entry / ts_col are optional metadata saved so that
+    'review' can train and save the forecaster config after the model is frozen.
     """
     import json as _json
     import pickle
@@ -192,6 +193,7 @@ def _save_pending_report(
         "y_all_log":        y_all_log,
         "frequency_seconds": (int(frequency.total_seconds()) if frequency is not None else None),
         "sensor_entry":      sensor_entry,
+        "ts_col":            ts_col,
     }
     with open(pkl_path, "wb") as _f:
         pickle.dump(payload, _f)
@@ -269,6 +271,7 @@ def _train_and_save_forecaster(
     sensor: dict,
     frequency: object,
     store_path: Path,
+    date_col: str = "Date",
 ) -> None:
     """
     Compute per-step uncertainty bands from the validation tail of X_all, then
@@ -314,6 +317,7 @@ def _train_and_save_forecaster(
         residual_std_by_step = residual_std_by_step,
         models_store_path    = store_path,
         n_steps              = n_steps,
+        date_col             = date_col,
     )
     print(f"[forecast] Forecaster config saved → {cfg_path} "
           f"(horizon={forecast_horizon_hours}h / freq={freq_hours:.0f}h"
@@ -389,7 +393,7 @@ def _cmd_onboard(args: argparse.Namespace) -> None:
 
     print(f"\n[onboard] Loading dataset:  {dataset_path}")
     try:
-        df = pd.read_csv(dataset_path, parse_dates=["Date"])
+        df = pd.read_csv(dataset_path)
     except Exception as exc:
         print(f"[onboard] Failed to load dataset: {exc}\n")
         sys.exit(1)
@@ -449,7 +453,7 @@ def _cmd_onboard(args: argparse.Namespace) -> None:
         s for s in sensors_config["sensors"]
         if s["parameter_name"] == args.parameter
     )
-    df_clean, frequency = _prepare_data(sensors_config, df.copy(), sensor_entry)
+    df_clean, frequency, _ts_col_ob = _prepare_data(sensors_config, df.copy(), sensor_entry)
 
     if variant_input == "log":
         col    = sensor_entry["column_name"]
@@ -458,9 +462,11 @@ def _cmd_onboard(args: argparse.Namespace) -> None:
         df_log[col_lg] = np.log1p(df_log[col])
         sensor_log = {**sensor_entry,
                       "column_name": col_lg, "parameter_name": col_lg}
-        X_tr, y_tr, X_v, y_v, *_ = _build_and_split(df_log, sensor_log, frequency)
+        X_tr, y_tr, X_v, y_v, *_ = _build_and_split(df_log, sensor_log, frequency,
+                                                      date_col=_ts_col_ob)
     else:
-        X_tr, y_tr, X_v, y_v, *_ = _build_and_split(df_clean, sensor_entry, frequency)
+        X_tr, y_tr, X_v, y_v, *_ = _build_and_split(df_clean, sensor_entry, frequency,
+                                                      date_col=_ts_col_ob)
 
     X_all = pd.concat([X_tr, X_v]).reset_index(drop=True)
     y_all = pd.concat([y_tr, y_v]).reset_index(drop=True)
@@ -476,7 +482,8 @@ def _cmd_onboard(args: argparse.Namespace) -> None:
 
     frozen_model = chosen_report.results[rank_input - 1].fitted_model
     _train_and_save_anomaly_detector(frozen_model, X_all, y_all, models_store)
-    _train_and_save_forecaster(frozen_model, X_all, y_all, sensor_entry, frequency, models_store)
+    _train_and_save_forecaster(frozen_model, X_all, y_all, sensor_entry, frequency, models_store,
+                               date_col=_ts_col_ob)
 
     print(f"\n[onboard] Model frozen.")
     print(f"  Algorithm  : {out['algorithm']}")
@@ -510,7 +517,7 @@ def _cmd_onboard_all(args: argparse.Namespace) -> None:
 
     print(f"\n[onboard --all] Loading dataset: {dataset_path}")
     try:
-        df_master = pd.read_csv(dataset_path, parse_dates=["Date"])
+        df_master = pd.read_csv(dataset_path)
     except Exception as exc:
         print(f"[onboard --all] Failed to load dataset: {exc}\n")
         sys.exit(1)
@@ -551,10 +558,11 @@ def _cmd_onboard_all(args: argparse.Namespace) -> None:
             continue
 
         # Build X_all / y_all for BOTH variants so 'review' can freeze either
-        df_clean, frequency = _prepare_data(
+        df_clean, frequency, _ts_col_oa = _prepare_data(
             sensors_config, df_master.copy(), sensor
         )
-        X_tr, y_tr, X_v, y_v, *_ = _build_and_split(df_clean, sensor, frequency)
+        X_tr, y_tr, X_v, y_v, *_ = _build_and_split(df_clean, sensor, frequency,
+                                                      date_col=_ts_col_oa)
         X_all_raw = pd.concat([X_tr, X_v]).reset_index(drop=True)
         y_all_raw = pd.concat([y_tr, y_v]).reset_index(drop=True)
 
@@ -567,7 +575,7 @@ def _cmd_onboard_all(args: argparse.Namespace) -> None:
             sensor_log = {**sensor, "column_name": col_log,
                           "parameter_name": col_log}
             Xtr_l, ytr_l, Xv_l, yv_l, *_ = _build_and_split(
-                df_log, sensor_log, frequency
+                df_log, sensor_log, frequency, date_col=_ts_col_oa
             )
             X_all_log = pd.concat([Xtr_l, Xv_l]).reset_index(drop=True)
             y_all_log = pd.concat([ytr_l, yv_l]).reset_index(drop=True)
@@ -582,6 +590,7 @@ def _cmd_onboard_all(args: argparse.Namespace) -> None:
             models_store  = models_store,
             frequency     = frequency,
             sensor_entry  = sensor,
+            ts_col        = _ts_col_oa,
         )
         best_rmse = result.best.val_rmse
         print(f"  [{param}] Done.  Best val RMSE = {best_rmse:.2f} {unit}")
@@ -635,6 +644,7 @@ def _cmd_review(args: argparse.Namespace) -> None:
     y_all_log          = payload.get("y_all_log")
     _freq_seconds      = payload.get("frequency_seconds")
     _sensor_entry_pkg  = payload.get("sensor_entry")
+    _ts_col_rev        = payload.get("ts_col", "Date")
 
     # ── Display report(s) ──────────────────────────────────────────────────
     print(f"\n[review] Pending report for '{param}': {pkl_path}")
@@ -704,6 +714,7 @@ def _cmd_review(args: argparse.Namespace) -> None:
         _train_and_save_forecaster(
             frozen_model, X_all, y_all,
             _sensor_entry_pkg, _td(seconds=_freq_seconds), store_path,
+            date_col=_ts_col_rev,
         )
     else:
         print("[forecast] No frequency/sensor metadata in pending report — "
@@ -831,16 +842,18 @@ def _cmd_monitor(args: argparse.Namespace) -> None:
         print(f"\n[monitor] New measurement rejected by validation — aborting: {reasons}\n")
         sys.exit(1)
 
-    # ── Extract measurement timestamp before feature engineering removes Date ─
-    # prepare_feature_row_from_raw() drops the Date column when building lag/
-    # rolling features. Capture it here so it can be injected into the result
-    # after process_new_measurement(), ensuring the JSONL stores the true
-    # measurement date rather than the processing wall-clock time.
-    _raw_timestamp = None
-    for _tc in ("Date", "timestamp", "date", "Time"):
-        if _tc in new_raw_row.columns:
-            _raw_timestamp = new_raw_row[_tc].iloc[0]
-            break
+    # ── Detect timestamp column once from config candidates ───────────────────
+    # Used for timestamp extraction, retrain-check frequency detection, and
+    # forecaster window conversion — never hardcoded to "Date".
+    from src.pipeline.timestamp_detector import detect_timestamp_column as _detect_ts_col
+    _ts_col = _detect_ts_col(df_history, sensor_config["timestamp_column_candidates"])
+
+    # ── Extract measurement timestamp before feature engineering removes it ──
+    # prepare_feature_row_from_raw() drops the timestamp column when building
+    # lag/rolling features. Capture it here so it can be injected into the
+    # result after process_new_measurement(), ensuring the JSONL stores the
+    # true measurement date rather than the processing wall-clock time.
+    _raw_timestamp = new_raw_row[_ts_col].iloc[0] if _ts_col in new_raw_row.columns else None
 
     # ── Build feature row from raw history + new raw row ──────────────────
     try:
@@ -875,15 +888,15 @@ def _cmd_monitor(args: argparse.Namespace) -> None:
         _param   = sensor["parameter_name"]
 
         _df_hist_ts = df_history.copy()
-        if "Date" in _df_hist_ts.columns:
-            _df_hist_ts["Date"] = pd.to_datetime(_df_hist_ts["Date"], errors="coerce")
-        _freq = detect_frequency(_df_hist_ts, date_col="Date")
+        _df_hist_ts[_ts_col] = pd.to_datetime(_df_hist_ts[_ts_col], errors="coerce")
+        _freq = detect_frequency(_df_hist_ts, date_col=_ts_col)
 
         def _retrain_feature_fn(df):
             return build_features_time_aware(
                 df, target=_param, frequency=_freq,
                 lag_hours=_lag_h, rolling_hours=_roll_h,
                 co_variables=_covars if _covars else None,
+                date_col=_ts_col,
             )
 
         _retrain_manager = RetrainManager(
@@ -916,8 +929,7 @@ def _cmd_monitor(args: argparse.Namespace) -> None:
     # Provide historical context for forecasting (Stage 4)
     if _forecaster is not None:
         _window = updated_hist.copy()
-        if "Date" in _window.columns:
-            _window["Date"] = pd.to_datetime(_window["Date"], errors="coerce")
+        _window[_ts_col] = pd.to_datetime(_window[_ts_col], errors="coerce")
         monitor._historical_window = _window
 
     actual   = float(args.actual_value) if args.actual_value is not None else None
@@ -965,6 +977,16 @@ def _cmd_monitor(args: argparse.Namespace) -> None:
         if result.anomaly_detected:
             print(f"  ⚠ ANOMALY DETECTED — score={result.anomaly_score:.3f} "
                   f"(threshold={threshold:.3f})")
+            print(f"    residual={result.residual:+.2f}  "
+                  f"(model expected {result.prediction:.2f}, got {actual:.2f})")
+            if result.anomaly_shap:
+                print(f"  What the model relied on (feature value → SHAP contribution):")
+                for i, entry in enumerate(result.anomaly_shap[:3], 1):
+                    feat     = entry.get("feature", "?")
+                    shap_val = entry.get("shap_value", 0.0)
+                    dirn     = "▲" if entry.get("direction") == "positive" else "▼"
+                    feat_val = feature_row[feat].iloc[0] if feat in feature_row.columns else float("nan")
+                    print(f"    {i}. {feat:<28} = {feat_val:>8.2f}   SHAP {dirn} {abs(shap_val):.4f}")
         else:
             print(f"  Anomaly check   : OK  (score={result.anomaly_score:.3f}, "
                   f"threshold={threshold:.3f})")
@@ -1100,6 +1122,66 @@ def _cmd_status(args: argparse.Namespace) -> None:
         for p in pending_params:
             print(f"\n  {p:<20} → python run.py review {p}")
         print()
+
+
+def _cmd_export_archive(args: argparse.Namespace) -> None:
+    """
+    export-archive: export a time-bounded slice of the Cold archive to a
+    single flat JSONL file for IE Warm-tier bootstrapping.
+
+    Accepts either --months N (N full calendar months back from today)
+    or explicit --start-date / --end-date (ISO 8601).
+    """
+    from datetime import datetime, timezone
+    from src.monitor.archive import export_archive_range
+
+    param       = args.parameter
+    output_path = Path(args.output)
+    archive_dir = args.archive_dir
+
+    if args.months is not None:
+        now   = datetime.now(timezone.utc)
+        m     = now.month - args.months
+        y     = now.year
+        while m <= 0:
+            m += 12
+            y -= 1
+        start_dt = datetime(y, m, 1, tzinfo=timezone.utc)
+        end_dt   = now
+        range_label = f"last {args.months} month(s)"
+    else:
+        if not args.start_date or not args.end_date:
+            print("\n[export-archive] Provide either --months N or both "
+                  "--start-date and --end-date.\n")
+            sys.exit(1)
+        start_dt = datetime.fromisoformat(args.start_date)
+        end_dt   = datetime.fromisoformat(args.end_date)
+        if start_dt.tzinfo is None:
+            start_dt = start_dt.replace(tzinfo=timezone.utc)
+        if end_dt.tzinfo is None:
+            end_dt = end_dt.replace(tzinfo=timezone.utc)
+        range_label = f"{args.start_date} → {args.end_date}"
+
+    print(f"\n[export-archive] Parameter : {param}")
+    print(f"[export-archive] Range     : {range_label}")
+    print(f"[export-archive] Source    : {archive_dir}")
+    print(f"[export-archive] Output    : {output_path}")
+
+    try:
+        n = export_archive_range(
+            parameter_name = param,
+            start_date     = start_dt,
+            end_date       = end_dt,
+            output_path    = output_path,
+            archive_dir    = archive_dir,
+        )
+    except ValueError as exc:
+        print(f"\n[export-archive] {exc}\n")
+        sys.exit(1)
+
+    size_kb = output_path.stat().st_size / 1024
+    print(f"\n[export-archive] Done — {n} records exported ({size_kb:.1f} KB)")
+    print(f"[export-archive] File: {output_path.resolve()}\n")
 
 
 def _cmd_approve(args: argparse.Namespace) -> None:
@@ -1271,6 +1353,50 @@ def _build_parser() -> argparse.ArgumentParser:
         help="If given, show status for this parameter only.",
     )
 
+    # ── export-archive ────────────────────────────────────────────────────
+    p_export = subs.add_parser(
+        "export-archive",
+        help        = "Export a time-bounded slice of the Cold archive to a single JSONL file.",
+        description = (
+            "IE team: use this command to bootstrap your Warm tier from the Cold archive.\n\n"
+            "Reads across compressed (.jsonl.gz) and plain (.jsonl) monthly files,\n"
+            "decompresses in memory, and writes a single flat JSONL to --output.\n\n"
+            "Date range: use --months N for the last N calendar months (recommended),\n"
+            "or provide explicit --start-date / --end-date (ISO 8601).\n\n"
+            "Examples:\n"
+            "  python run.py export-archive --parameter EC --months 12 \\\n"
+            "      --output warm_tier/EC_last_12m.jsonl\n\n"
+            "  python run.py export-archive --parameter pH \\\n"
+            "      --start-date 2025-08-01 --end-date 2026-07-31 \\\n"
+            "      --output warm_tier/pH_fy2026.jsonl"
+        ),
+    )
+    p_export.add_argument(
+        "--parameter", required=True, metavar="NAME",
+        help="Parameter name (e.g. EC, pH, Turbidity).",
+    )
+    _date_group = p_export.add_mutually_exclusive_group(required=True)
+    _date_group.add_argument(
+        "--months", type=int, metavar="N",
+        help="Export the last N full calendar months (start = first day of month N months ago).",
+    )
+    _date_group.add_argument(
+        "--start-date", dest="start_date", metavar="YYYY-MM-DD",
+        help="Explicit start date (ISO 8601, inclusive). Requires --end-date.",
+    )
+    p_export.add_argument(
+        "--end-date", dest="end_date", metavar="YYYY-MM-DD",
+        help="Explicit end date (ISO 8601, inclusive). Required with --start-date.",
+    )
+    p_export.add_argument(
+        "--output", required=True, metavar="PATH",
+        help="Destination JSONL file path (created with its parent directories).",
+    )
+    p_export.add_argument(
+        "--archive-dir", dest="archive_dir", default="archive", metavar="PATH",
+        help="Root Cold archive directory (default: archive/).",
+    )
+
     # ── approve ───────────────────────────────────────────────────────────
     p_approve = subs.add_parser(
         "approve",
@@ -1304,22 +1430,24 @@ def main(argv: list[str] | None = None) -> None:
     args   = parser.parse_args(argv)
 
     # ── Config validation (before any src import) ─────────────────────────
-    _validate_configs(
-        system_config_path  = Path(args.system_config),
-        sensors_config_path = Path(args.sensors_config),
-    )
-
-    # ── Logging setup ─────────────────────────────────────────────────────
-    from src._logging import setup_logging_from_config
-    setup_logging_from_config(config_path=Path(args.system_config))
+    # export-archive only reads the Cold archive files — no model store,
+    # no system config needed.  Skip validation so IE can run it standalone.
+    if args.command != "export-archive":
+        _validate_configs(
+            system_config_path  = Path(args.system_config),
+            sensors_config_path = Path(args.sensors_config),
+        )
+        from src._logging import setup_logging_from_config
+        setup_logging_from_config(config_path=Path(args.system_config))
 
     # ── Dispatch ──────────────────────────────────────────────────────────
     dispatch = {
-        "onboard": _cmd_onboard,
-        "review":  _cmd_review,
-        "monitor": _cmd_monitor,
-        "status":  _cmd_status,
-        "approve": _cmd_approve,
+        "onboard":        _cmd_onboard,
+        "review":         _cmd_review,
+        "monitor":        _cmd_monitor,
+        "status":         _cmd_status,
+        "approve":        _cmd_approve,
+        "export-archive": _cmd_export_archive,
     }
     dispatch[args.command](args)
 

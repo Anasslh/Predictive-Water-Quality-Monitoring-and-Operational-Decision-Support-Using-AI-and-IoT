@@ -88,6 +88,10 @@ class MultiStepForecaster:
     residual_std_by_step : Pre-computed std of residuals per forecast step.
                  Index 0 = step-1 uncertainty, index 1 = step-2, etc.
                  If None, uncertainty bands cannot be drawn.
+    date_col   : Name of the timestamp column in the historical window.
+                 Loaded from forecaster_config.json (field "date_col");
+                 defaults to "Date" for backward compatibility with configs
+                 written before this field was added.
     """
 
     def __init__(
@@ -97,12 +101,14 @@ class MultiStepForecaster:
         feature_fn:   Callable[[pd.DataFrame], tuple[pd.DataFrame, pd.Series]],
         frequency:    timedelta,
         residual_std_by_step: list[float] | None = None,
+        date_col:     str = "Date",
     ) -> None:
         self.model                 = model
         self.target                = target
         self.feature_fn            = feature_fn
         self.frequency             = frequency
         self.residual_std_by_step  = residual_std_by_step or []
+        self.date_col              = date_col
 
     # ── Main API ───────────────────────────────────────────────────────────────
 
@@ -118,7 +124,8 @@ class MultiStepForecaster:
         ----------
         historical_window : pd.DataFrame
             Raw data up to (and including) the last known timestep.
-            Must contain 'Date', the target column, and all co-variable columns.
+            Must contain the timestamp column (self.date_col), the target
+            column, and all co-variable columns.
             Must have at least max_lag + max_rolling_window rows of valid history
             (typically 7 rows for the default EC feature set).
         n_steps : int
@@ -128,7 +135,7 @@ class MultiStepForecaster:
         -------
         ForecastResult
         """
-        window = historical_window.copy().sort_values("Date").reset_index(drop=True)
+        window = historical_window.copy().sort_values(self.date_col).reset_index(drop=True)
         predictions = []
         uncertainty = []
 
@@ -145,11 +152,11 @@ class MultiStepForecaster:
             )
             uncertainty.append(std)
 
-            # Extend window: copy last row, advance Date, set target to prediction.
+            # Extend window: copy last row, advance timestamp, set target to prediction.
             # Co-variable columns keep their last known value (see module docstring).
-            new_row           = window.iloc[-1].copy()
-            new_row["Date"]   = new_row["Date"] + self.frequency
-            new_row[self.target] = pred
+            new_row                  = window.iloc[-1].copy()
+            new_row[self.date_col]   = new_row[self.date_col] + self.frequency
+            new_row[self.target]     = pred
             window = pd.concat(
                 [window, pd.DataFrame([new_row])], ignore_index=True
             )
@@ -177,8 +184,8 @@ class MultiStepForecaster:
         could (those come from the last row of window, already correct).
         """
         synthetic      = window.iloc[-1].copy()
-        synthetic["Date"]       = synthetic["Date"] + self.frequency
-        synthetic[self.target]  = 0.0   # placeholder — shifted, so not used
+        synthetic[self.date_col] = synthetic[self.date_col] + self.frequency
+        synthetic[self.target]   = 0.0   # placeholder — shifted, so not used
 
         extended = pd.concat(
             [window, pd.DataFrame([synthetic])], ignore_index=True
@@ -205,13 +212,16 @@ def save_forecaster_config(
     residual_std_by_step: list[float],
     models_store_path: "str | Path",
     n_steps: int = 7,
+    date_col: str = "Date",
 ) -> "Path":
     """
     Persist the forecaster configuration to <models_store_path>/forecaster_config.json.
 
     The model itself is not stored here (it lives in current_model.json).
-    This file only stores the feature engineering parameters and uncertainty bands
-    needed to reconstruct a MultiStepForecaster at load time.
+    This file stores the feature engineering parameters, uncertainty bands,
+    and the timestamp column name needed to reconstruct a MultiStepForecaster
+    at load time.  The "date_col" field was added in schema v1.1; older configs
+    that lack it are handled by load_forecaster() with a "Date" default.
     """
     import json
     from pathlib import Path as _Path
@@ -225,6 +235,7 @@ def save_forecaster_config(
         "co_variables":          co_variables,
         "residual_std_by_step":  [round(s, 6) for s in residual_std_by_step],
         "n_steps":               n_steps,
+        "date_col":              date_col,
     }
     out.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
     return out
@@ -255,6 +266,10 @@ def load_forecaster(
     rolling_hours = raw["rolling_hours"]
     co_variables  = raw.get("co_variables", [])
     residual_std  = raw.get("residual_std_by_step", [])
+    # "date_col" was added in the fix that makes the pipeline generic over the
+    # timestamp column name.  Older forecaster_config.json files that predate
+    # this change simply lack the field; default to "Date" so they keep working.
+    date_col      = raw.get("date_col", "Date")
 
     def _feature_fn(df: pd.DataFrame) -> "tuple[pd.DataFrame, pd.Series]":
         return build_features_time_aware(
@@ -264,6 +279,7 @@ def load_forecaster(
             lag_hours     = lag_hours,
             rolling_hours = rolling_hours,
             co_variables  = co_variables if co_variables else None,
+            date_col      = date_col,
         )
 
     forecaster = MultiStepForecaster(
@@ -272,6 +288,7 @@ def load_forecaster(
         feature_fn           = _feature_fn,
         frequency            = frequency,
         residual_std_by_step = residual_std,
+        date_col             = date_col,
     )
     # Expose the saved n_steps so callers can pass it as forecast_steps
     forecaster._config_n_steps: int = raw.get("n_steps", 7)

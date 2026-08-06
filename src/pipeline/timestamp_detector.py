@@ -50,10 +50,18 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 # ISO formats tried in order — unambiguous, year first.
+# Variants with %z (timezone offset) come first so they match before the
+# timezone-naive equivalents.  %f matches 1–9 digit sub-second fractions
+# (pandas internal handling), so "2026-05-25 16:09:38.503752912+00:00" is
+# recognised as strict ISO without falling through to the inference path.
 _ISO_FORMATS = (
-    "%Y-%m-%dT%H:%M:%S",
-    "%Y-%m-%d %H:%M:%S",
-    "%Y-%m-%d",
+    "%Y-%m-%dT%H:%M:%S.%f%z",   # ISO 8601: T-sep, sub-seconds, timezone offset
+    "%Y-%m-%d %H:%M:%S.%f%z",   # same with space separator
+    "%Y-%m-%dT%H:%M:%S%z",      # ISO 8601: T-sep, no sub-seconds, timezone offset
+    "%Y-%m-%d %H:%M:%S%z",      # same with space separator
+    "%Y-%m-%dT%H:%M:%S",        # ISO 8601: T-sep, no timezone
+    "%Y-%m-%d %H:%M:%S",        # ISO with space separator, no timezone
+    "%Y-%m-%d",                  # date-only ISO (C-1 dataset format)
 )
 
 
@@ -82,6 +90,11 @@ def _try_parse(col: pd.Series) -> tuple[pd.Series, bool]:
         except Exception:
             continue
         if parsed.notna().all():
+            # Formats with %z produce tz-aware series.  Normalise to UTC-naive
+            # so downstream feature engineering (shift, diff, merge) stays
+            # compatible with the rest of the pipeline which expects naive timestamps.
+            if isinstance(parsed.dtype, pd.DatetimeTZDtype):
+                parsed = parsed.dt.tz_convert("UTC").dt.tz_localize(None)
             return parsed, False
 
     # Step 2: pandas automatic inference as fallback.

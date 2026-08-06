@@ -54,13 +54,14 @@ def build_features_time_aware(
     rolling_hours: list[int] | None = None,
     diff: bool = False,
     co_variables: list[str] | None = None,
+    date_col: str = "Date",
 ) -> tuple[pd.DataFrame, pd.Series]:
     """
     Build feature matrix using hour-based windows, independent of data frequency.
 
     Parameters
     ----------
-    df           : Cleaned dataset. Must contain 'Date' and the target column.
+    df           : Cleaned dataset. Must contain the timestamp column and the target.
     target       : "EC", "pH", or "Turbidity".
     frequency    : Measurement interval (from detect_frequency()).
                    Used to convert hour-based windows to row counts.
@@ -95,7 +96,7 @@ def build_features_time_aware(
     lag_steps     = [max(1, math.floor(h / freq_h)) for h in lag_hours]
     rolling_rows  = [max(1, math.floor(h / freq_h)) for h in rolling_hours]
 
-    df   = df.copy().sort_values("Date").reset_index(drop=True)
+    df   = df.copy().sort_values(date_col).reset_index(drop=True)
     feat = pd.DataFrame(index=df.index)
 
     # Lag features — named by step count (not hours) for column-name stability

@@ -160,14 +160,19 @@ class BenchmarkReport:
 
     The caller must explicitly choose a model (by rank or label) before
     calling orchestrator.submit_benchmark_choice().
+
+    persistence_rmse : RMSE of the lag-1 persistence baseline on the same
+        validation set used to rank the models.  None when the lag-1 feature
+        column is absent from X_val (e.g. custom feature sets that omit lag1).
     """
-    parameter_name: str
-    unit:           str
-    n_train:        int
-    n_val:          int
-    n_features:     int
-    timestamp:      str
-    results:        list[ModelResult]   # sorted by val_rmse ascending
+    parameter_name:   str
+    unit:             str
+    n_train:          int
+    n_val:            int
+    n_features:       int
+    timestamp:        str
+    results:          list[ModelResult]   # sorted by val_rmse ascending
+    persistence_rmse: float | None = None
 
     @property
     def best(self) -> ModelResult:
@@ -290,18 +295,32 @@ def benchmark_models(
     for rank, r in enumerate(raw_results, start=1):
         r.rank = rank
 
+    # Persistence baseline: predict y_val[t] = y_val[t-1].
+    # The lag-1 feature is stored in X_val under "{parameter_name}_lag1" by
+    # build_features_time_aware(), so we read it directly rather than shifting
+    # y_val (which would lose the first row and require the last training point).
+    lag1_col = f"{parameter_name}_lag1"
+    persistence_rmse: float | None = None
+    if lag1_col in X_val.columns:
+        pers_preds = X_val[lag1_col].values
+        persistence_rmse = float(np.sqrt(np.mean((y_val.values - pers_preds) ** 2)))
+
     from datetime import datetime, timezone
     ts = datetime.now(timezone.utc).isoformat()
 
     return BenchmarkReport(
-        parameter_name = parameter_name,
-        unit           = unit,
-        n_train        = len(X_train),
-        n_val          = len(X_val),
-        n_features     = X_train.shape[1],
-        timestamp      = ts,
-        results        = raw_results,
+        parameter_name   = parameter_name,
+        unit             = unit,
+        n_train          = len(X_train),
+        n_val            = len(X_val),
+        n_features       = X_train.shape[1],
+        timestamp        = ts,
+        results          = raw_results,
+        persistence_rmse = persistence_rmse,
     )
+
+
+_SKILL_WARN_THRESHOLD = 0.05   # warn if best model < 5% better than persistence
 
 
 def format_benchmark_report(report: BenchmarkReport, top_n: int = 10) -> str:
@@ -310,6 +329,11 @@ def format_benchmark_report(report: BenchmarkReport, top_n: int = 10) -> str:
 
     Shows the top_n models (default 10). The complete list is always in
     report.results for programmatic inspection.
+
+    When persistence_rmse is available, a "Persistence baseline" section is
+    appended after the ranking, showing the lag-1 RMSE and the skill score of
+    the best model relative to that baseline.  A warning is printed when the
+    skill score is below _SKILL_WARN_THRESHOLD (5%).
     """
     SEP  = "─" * 76
     SEP2 = "═" * 76
@@ -347,6 +371,34 @@ def format_benchmark_report(report: BenchmarkReport, top_n: int = 10) -> str:
         f"    Val RMSE  = {best.val_rmse:.4f} {report.unit}",
         f"    Val MAE   = {best.val_mae:.4f} {report.unit}",
         f"    Params    : {best.hyperparams}",
+    ]
+
+    # ── Persistence baseline section ──────────────────────────────────────────
+    if report.persistence_rmse is not None:
+        p_rmse = report.persistence_rmse
+        skill  = (1.0 - best.val_rmse / p_rmse) if p_rmse > 0 else float("nan")
+        skill_pct = skill * 100
+
+        lines += [
+            SEP,
+            f"  Persistence baseline (lag-1)   : RMSE = {p_rmse:.4f} {report.unit}",
+            f"  Skill score (best vs baseline) : {skill_pct:+.1f}%"
+            f"  (1 − best_RMSE / persistence_RMSE)",
+        ]
+
+        if skill < _SKILL_WARN_THRESHOLD:
+            lines += [
+                "  ⚠  Best model does NOT outperform simple persistence (lag-1).",
+                "     Consider using persistence as the production baseline for this",
+                "     parameter, or reconsider the feature engineering (lags/rolling)",
+                "     relative to the measurement frequency.",
+            ]
+        else:
+            lines.append(
+                f"  ✓  Best model beats persistence by {skill_pct:.1f}%."
+            )
+
+    lines += [
         SEP,
         "  ⚠  NO MODEL SELECTED AUTOMATICALLY. Human decision required.",
         "  Call submit_benchmark_choice(report, chosen_rank=N, ...) to proceed.",
@@ -495,12 +547,22 @@ def rerank_log_report_to_original_scale(
     # Strip trailing "_log" from parameter_name before re-adding it,
     # so double-suffixing never occurs.
     base_name = report_log.parameter_name.removesuffix("_log")
+
+    # Recompute persistence baseline in original scale: the lag-1 feature was
+    # computed on the log-transformed target, so back-transform via expm1().
+    lag1_col = f"{base_name}_log_lag1"
+    persistence_rmse: float | None = None
+    if lag1_col in X_val_log.columns:
+        pers_preds_orig = np.expm1(X_val_log[lag1_col].values)
+        persistence_rmse = float(np.sqrt(np.mean((y_orig - pers_preds_orig) ** 2)))
+
     return BenchmarkReport(
-        parameter_name = base_name + "_log",
-        unit           = unit,
-        n_train        = report_log.n_train,
-        n_val          = report_log.n_val,
-        n_features     = report_log.n_features,
-        timestamp      = report_log.timestamp,
-        results        = new_results,
+        parameter_name   = base_name + "_log",
+        unit             = unit,
+        n_train          = report_log.n_train,
+        n_val            = report_log.n_val,
+        n_features       = report_log.n_features,
+        timestamp        = report_log.timestamp,
+        results          = new_results,
+        persistence_rmse = persistence_rmse,
     )

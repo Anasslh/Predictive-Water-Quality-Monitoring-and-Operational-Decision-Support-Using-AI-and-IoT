@@ -228,6 +228,67 @@ def test_unparseable_column_raises() -> None:
         check("Unparseable column raises ValueError", "parse" in str(exc).lower())
 
 
+def test_iso_datetime_with_fractional_seconds_and_timezone() -> None:
+    """
+    ISO timestamps with sub-second precision and UTC offset (e.g.
+    '2026-05-25 16:09:38.503752912+00:00') must be recognised as strict ISO
+    without triggering the 'automatic inference / ambiguous day/month' warning.
+
+    Verifies:
+      (a) The column is accepted.
+      (b) No 'automatic inference' warning is emitted.
+      (c) The returned series is timezone-naive (UTC-normalised) so it remains
+          compatible with the rest of the pipeline.
+    """
+    dates = [
+        "2026-05-25 16:09:38.503752912+00:00",
+        "2026-05-26 08:22:11.123456789+00:00",
+        "2026-05-27 14:55:00.000000001+00:00",
+    ]
+    df = pd.DataFrame({"ts": dates, "v": [1, 2, 3]})
+
+    warning_messages: list[str] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            if record.levelno >= logging.WARNING:
+                warning_messages.append(record.getMessage())
+
+    handler = _Capture()
+    ts_logger = logging.getLogger("src.pipeline.timestamp_detector")
+    ts_logger.addHandler(handler)
+    ts_logger.setLevel(logging.WARNING)
+
+    try:
+        col = detect_timestamp_column(df, ["ts"])
+        accepted = col == "ts"
+    except ValueError:
+        accepted = False
+    finally:
+        ts_logger.removeHandler(handler)
+
+    check(
+        "ISO datetime with sub-seconds + timezone accepted",
+        accepted,
+        "column should be detected without exception",
+    )
+    check(
+        "No 'automatic inference' warning for unambiguous ISO+TZ format",
+        not any("automatic inference" in m for m in warning_messages),
+        f"warnings: {warning_messages}" if warning_messages else "no warnings (correct)",
+    )
+
+    # Also verify parse_timestamp_column returns tz-naive timestamps
+    if accepted:
+        result = parse_timestamp_column(df, "ts")
+        tz_naive = not hasattr(result["ts"].dtype, "tz") or result["ts"].dt.tz is None
+        check(
+            "parse_timestamp_column returns tz-naive (UTC-normalised) series",
+            tz_naive,
+            f"dtype={result['ts'].dtype}",
+        )
+
+
 # ── runner ────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -248,6 +309,7 @@ def main() -> None:
     test_parse_iso_correct_date()
     test_parse_ambiguous_ddmmyyyy_warns()
     test_unparseable_column_raises()
+    test_iso_datetime_with_fractional_seconds_and_timezone()
 
     passed = sum(1 for _, ok in _results if ok)
     total  = len(_results)

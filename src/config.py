@@ -80,6 +80,7 @@ class LoggingConfig:
 class ExportsConfig:
     exports_dir:    str = "exports"
     retention_days: int = 30
+    archive_dir:    str = "archive"
 
 
 @dataclass
@@ -150,6 +151,7 @@ def _parse_config(raw: dict) -> SystemConfig:
         exports=ExportsConfig(
             exports_dir    = raw.get("exports", {}).get("exports_dir",    "exports"),
             retention_days = int(raw.get("exports", {}).get("retention_days", 30)),
+            archive_dir    = raw.get("exports", {}).get("archive_dir",    "archive"),
         ),
     )
 

@@ -63,6 +63,7 @@ from src.monitor.export import (
     write_status_export    as _write_status_export,
     get_dashboard_export_paths,
 )
+from src.monitor.archive import append_to_archive as _append_to_archive
 
 logger = logging.getLogger(__name__)
 
@@ -305,7 +306,7 @@ class ParameterMonitor:
                     self._last_anomaly_detected = result.anomaly_detected
 
                     if result.anomaly_detected:
-                        result.anomaly_shap = self._explain(new_row)
+                        result.anomaly_shap = result.prediction_shap
                         logger.warning(
                             "[%s] ANOMALY detected  score=%.3f >= threshold=%.2f  "
                             "residual=%.4f  top_feature=%s",
@@ -363,7 +364,7 @@ class ParameterMonitor:
             except Exception as exc:
                 logger.error("[%s] Forecast failed: %s", self.parameter_name, exc)
 
-        # ── Stage 5: Rolling JSONL export ─────────────────────────────────────
+        # ── Stage 5: Rolling JSONL export (Hot, 30-day window) ───────────────
         try:
             _append_measurement(
                 self.parameter_name,
@@ -373,6 +374,16 @@ class ParameterMonitor:
             )
         except Exception as exc:
             logger.warning("[%s] Export write failed (non-fatal): %s", self.parameter_name, exc)
+
+        # ── Stage 5b: Permanent archive (Cold, no purge, monthly gz rotation) ─
+        try:
+            _append_to_archive(
+                self.parameter_name,
+                result,
+                archive_dir = self.cfg.exports.archive_dir,
+            )
+        except Exception as exc:
+            logger.warning("[%s] Archive write failed (non-fatal): %s", self.parameter_name, exc)
 
         # ── Stage 6: Status JSON (overwritten after every measurement) ─────────
         try:
@@ -545,6 +556,7 @@ def prepare_feature_row_from_raw(
         lag_hours     = lag_hours,
         rolling_hours = rolling_hours,
         co_variables  = co_variables if co_variables else None,
+        date_col      = ts_col,
     )
 
     if len(X) == 0:

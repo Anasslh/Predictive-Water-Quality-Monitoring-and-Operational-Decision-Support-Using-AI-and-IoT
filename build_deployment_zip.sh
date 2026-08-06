@@ -100,7 +100,9 @@ FILES_TO_INCLUDE=(
 
   # Monitor
   "src/monitor/__init__.py"
+  "src/monitor/archive.py"
   "src/monitor/export.py"
+  "src/monitor/test_archive.py"
   "src/monitor/test_export.py"
   "src/monitor/test_monitor_raw_input.py"
   "src/monitor/test_status_export.py"

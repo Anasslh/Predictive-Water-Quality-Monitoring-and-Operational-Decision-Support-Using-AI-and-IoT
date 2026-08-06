@@ -15,9 +15,10 @@
     "Turbidity"
   ],
   "residual_std_by_step": [
-    46.587337,
-    65.884444,
-    80.691634
+    48.363862,
+    68.396829,
+    83.768665
   ],
-  "n_steps": 3
+  "n_steps": 3,
+  "date_col": "Date"
 }
