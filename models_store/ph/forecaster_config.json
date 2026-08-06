@@ -1,0 +1,24 @@
+{
+  "target": "pH",
+  "frequency_seconds": 86400,
+  "lag_hours": [
+    24,
+    48,
+    72
+  ],
+  "rolling_hours": [
+    72,
+    168
+  ],
+  "co_variables": [
+    "EC",
+    "Turbidity"
+  ],
+  "residual_std_by_step": [
+    0.846889,
+    1.197682,
+    1.466855
+  ],
+  "n_steps": 3,
+  "date_col": "Date"
+}
