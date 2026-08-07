@@ -137,10 +137,13 @@ def compute_shap_explanation(
 
     else:  # kernel
         if background is None:
-            logger.warning(
+            import warnings as _warnings
+            _warnings.warn(
                 "KernelExplainer: no background dataset provided — "
                 "using X_row itself as reference (less accurate). "
-                "Pass background=shap.kmeans(X_train, 20) for better results."
+                "Pass background=shap.kmeans(X_train, 20) for better results.",
+                UserWarning,
+                stacklevel=2,
             )
             bg = X_row
         else:
