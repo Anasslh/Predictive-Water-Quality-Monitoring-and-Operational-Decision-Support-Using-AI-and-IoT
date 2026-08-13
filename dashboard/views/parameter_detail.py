@@ -9,14 +9,15 @@ Drinking-water WQI references are intentionally confined to Methodology.
 from __future__ import annotations
 
 from datetime import datetime, time
-
+import pandas as pd
 import streamlit as st
 
 from dashboard.components import charts, layout
 from dashboard.components.format import DASH, fmt_timestamp, fmt_value
 from dashboard.components.shap_panel import render_shap
 from dashboard.context import AppContext
-from dashboard.models.schemas import ParameterData
+from dashboard.models.schemas import ParameterData, MeasurementRecord
+from dashboard.services.db_service import fetch_historical_parameter_data
 
 
 def render(ctx: AppContext) -> None:
@@ -25,19 +26,54 @@ def render(ctx: AppContext) -> None:
         return
 
     names = ctx.parameter_names
-    # Parameter selector (remembered across reruns).
     selected = st.selectbox(
         tr.t("parameter"), names,
         index=names.index(st.session_state.get("detail_param", names[0]))
         if st.session_state.get("detail_param") in names else 0,
         key="detail_param",
     )
-    pdata = ctx.params[selected]
+    
+    # ── HOT / WARM TIER ROUTING LOGIC ───────────────────────────────────────
+    use_warm_tier = st.toggle("Load 12-Month Historical Archive (Warm Tier Database)", value=False)
+    
+    hot_pdata = ctx.params[selected]
+    
+    if use_warm_tier:
+        with st.spinner(f"Querying local SQL Server for {selected} history..."):
+            historical_df = fetch_historical_parameter_data(selected)
+            warm_records = []
+            
+            if historical_df is not None and not historical_df.empty:
+                for _, row in historical_df.iterrows():
+                    try:
+                        obj = {
+                            "timestamp": str(row["timestamp"]),
+                            "parameter_name": selected,
+                            "predicted_value": None if pd.isna(row.get("predicted_value")) else row["predicted_value"],
+                            "actual_value": None if pd.isna(row.get("actual_value")) else row["actual_value"],
+                            "shap_top_features": row["shap_top_features"],
+                            "is_anomaly": None if pd.isna(row.get("is_anomaly")) else bool(row["is_anomaly"]),
+                            "anomaly_score": None if pd.isna(row.get("anomaly_score")) else row["anomaly_score"],
+                            "retrain_alert": None if pd.isna(row.get("retrain_alert")) else row["retrain_alert"]
+                        }
+                        warm_records.append(MeasurementRecord.from_dict(obj))
+                    except Exception:
+                        pass
+            
+            pdata = ParameterData(
+                name=selected,
+                unit=hot_pdata.unit,
+                records=warm_records,
+                status=hot_pdata.status,
+                load_errors=0
+            )
+    else:
+        pdata = hot_pdata
+        
     unit = pdata.display_unit
 
     layout.section(f"{selected}", _subtitle(pdata, tr))
 
-    # ── Headline tiles ──────────────────────────────────────────────────────
     latest_actual = pdata.latest_actual_record
     latest = pdata.latest
     actual_val = latest_actual.actual_value if latest_actual else None
@@ -55,13 +91,11 @@ def render(ctx: AppContext) -> None:
     with c4:
         layout.kpi_tile(tr.t("measured_at"), fmt_timestamp(measured_at))
 
-    # ── History chart with date-range filter ────────────────────────────────
     layout.section(tr.t("history"))
     filtered = _date_range_filter(pdata, tr)
     fig = charts.actual_vs_predicted(filtered, tr)
     st.plotly_chart(fig, width="stretch", config=layout.plotly_config())
 
-    # ── Data quality + explanation, side by side ────────────────────────────
     left, right = st.columns([1, 1.4])
     with left:
         layout.section(tr.t("data_quality"))
@@ -78,7 +112,6 @@ def _subtitle(pdata: ParameterData, tr) -> str:
 
 
 def _date_range_filter(pdata: ParameterData, tr) -> ParameterData:
-    """Slice records to a user-selected date range. No-op when < 2 dated records."""
     dated = [r for r in pdata.records if r.timestamp is not None]
     if len(dated) < 2:
         return pdata
@@ -112,6 +145,5 @@ def _data_quality(pdata: ParameterData, tr) -> None:
         (tr.t("missing_actuals"), str(missing_actual)),
     ]
     if pdata.load_errors:
-        # Reported quietly as a data-quality figure, not an alarm banner.
         rows.append(("Skipped malformed lines", str(pdata.load_errors)))
     layout.kv_table(rows)
