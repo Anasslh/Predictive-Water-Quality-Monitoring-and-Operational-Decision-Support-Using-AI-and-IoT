@@ -22,6 +22,10 @@ class AppContext:
     tr: Translator
     params: dict[str, ParameterData] = field(default_factory=dict)
     now: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    # Operator-facing data selection. ``current`` reads rolling export files;
+    # ``archive`` reads the bounded SQL Server Warm tier. All views receive the
+    # same selected ParameterData mapping so pages never mix measurement tiers.
+    data_source: str = "current"
 
     @property
     def parameter_names(self) -> list[str]:
@@ -29,3 +33,7 @@ class AppContext:
 
     def has_data(self) -> bool:
         return any(p.has_records for p in self.params.values())
+
+    @property
+    def is_historical_archive(self) -> bool:
+        return self.data_source == "archive"

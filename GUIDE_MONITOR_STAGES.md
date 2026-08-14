@@ -242,8 +242,9 @@ directory) without touching any other code.
 > The Cold archive (`archive/`) is the authoritative source for this data.
 
 Use the `export-archive` command to export any time range from the Cold
-archive into a single, self-contained JSONL file that the dashboard can
-consume directly.  The command handles compressed and uncompressed monthly
+archive into a single, self-contained JSONL file for validated SQL Server
+ingestion. The dashboard does not read this intermediate file directly. The
+command handles compressed and uncompressed monthly
 files transparently — no knowledge of gzip or the month-per-file layout
 is needed on the IE side.
 
@@ -266,7 +267,7 @@ python run.py export-archive \
     --output warm_tier/pH_fy2026.jsonl
 ```
 
-**All three parameters at once (shell loop):**
+**Several configured parameters (shell example):**
 
 ```bash
 for PARAM in EC pH Turbidity; do
@@ -289,3 +290,17 @@ Fields: `timestamp`, `parameter_name`, `predicted_value`, `actual_value`,
   Cold archive lives elsewhere (e.g. a network share).
 - The output file is written atomically (`.tmp` → rename), so a
   partial/interrupted export never leaves a corrupt file.
+
+**Load the exported file into the SQL Server Warm tier:**
+
+```bash
+python warm_tier_etl.py --init-schema
+python warm_tier_etl.py warm_tier/EC_last_12m.jsonl \
+    --site-id C-1 --parameter EC --unit "µS/cm"
+```
+
+This second step is manual and idempotent. It validates each JSONL row and
+uses `(site, parameter, timestamp)` as the deterministic SQL identity. See
+[`dashboard/WARM_TIER.md`](dashboard/WARM_TIER.md) for database provisioning,
+configuration, security, query behavior, and tests. No scheduled or automatic
+Cold-to-Warm transfer is currently implemented.

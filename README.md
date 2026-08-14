@@ -79,6 +79,7 @@ Additional constraints of the current export set:
 - Forecasts are calculated inside the monitoring pipeline but are not yet serialized into the dashboard export contract. The Forecast page is consequently hidden.
 - Model version, last model update, R², and drift status are not currently available in the supplied exports. Optional null fields are omitted from the interface.
 - The EC records are historical research/replay data and include sharply alternating measurements in tight succession. The dashboard preserves and discloses those values rather than smoothing or replacing them.
+- SQL Server Historical archive mode is optional and contains no repository-committed database. It appears only when `DB_CONN_STR` is configured and valid records have been ingested.
 
 ## Quick start
 
@@ -168,6 +169,10 @@ All settings are optional and resolve relative to the repository root by default
 | `WQD_DEFAULT_LANG` | `en` | Interface language: `en` or `ar` |
 | `WQD_RETENTION_DAYS` | `30` | Expected rolling export window |
 | `WQD_FRESH_MULTIPLIER` | `3.0` | Continuous-mode freshness heuristic multiplier |
+| `DB_CONN_STR` | unset | Enables the optional SQL Server Historical archive source; keep secrets outside source control |
+| `WQD_WARM_SITE_ID` | `WQD_SITE_ID` / `C-1` | Site used to scope historical queries |
+| `WQD_WARM_LOOKBACK_DAYS` | `365` | Maximum selectable historical query window |
+| `WQD_DB_TIMEOUT_SECONDS` | `5` | SQL connection and query timeout |
 
 Example:
 
@@ -180,6 +185,23 @@ For the exact schema and behavior, see:
 - [`dashboard/DATA_CONTRACT.md`](dashboard/DATA_CONTRACT.md)
 - [`dashboard/ASSUMPTIONS.md`](dashboard/ASSUMPTIONS.md)
 - [`dashboard/IMPLEMENTATION_REPORT.md`](dashboard/IMPLEMENTATION_REPORT.md)
+- [`dashboard/WARM_TIER.md`](dashboard/WARM_TIER.md)
+
+### Optional SQL Server historical archive
+
+The monitoring pipeline writes a permanent monthly Cold archive. A manual CLI
+export can be validated and idempotently ingested into SQL Server, after which
+the operator can select **Historical archive** globally in the dashboard.
+
+```powershell
+python run.py export-archive --parameter EC --months 12 --output warm_tier/EC_last_12m.jsonl
+python warm_tier_etl.py --init-schema
+python warm_tier_etl.py warm_tier/EC_last_12m.jsonl --site-id C-1 --parameter EC --unit "µS/cm"
+```
+
+This handoff is manual; no scheduled ingestion is claimed. See
+[`dashboard/WARM_TIER.md`](dashboard/WARM_TIER.md) for SQL provisioning,
+configuration, schema, security, failure behavior, and integration testing.
 
 ## Run the ML pipeline
 
@@ -254,6 +276,10 @@ Each monitored parameter can produce:
 
 The dashboard reads only these exports plus the processed WQI artifact used on the Methodology page. It does not import `src/`, load pickles, acknowledge incidents, or modify any export.
 
+For longer history, `run.py export-archive` produces a bounded flat JSONL from
+the permanent Cold archive. `warm_tier_etl.py` validates and upserts that file
+into SQL Server. This does not redefine the Hot export contract.
+
 ### Record and chart policies
 
 - Records are sorted chronologically.
@@ -293,6 +319,7 @@ See [`config/README_sensors_config.md`](config/README_sensors_config.md) for the
 
 ```text
 config/          Sensor declarations and system settings
+database/        Versioned SQL Server Warm-tier provisioning and schema scripts
 dashboard/       Streamlit application, components, services, localization, tests, and technical docs
 data/            Raw, interim, and processed research datasets
 exports/         Dashboard-facing monitoring exports
@@ -324,6 +351,9 @@ Run the dashboard suite from any supported platform:
 python -m pytest dashboard/tests -q
 ```
 
+The SQL Server integration test is skipped unless an isolated test database is
+explicitly configured through `WQD_TEST_DB_CONN_STR`; see `dashboard/WARM_TIER.md`.
+
 The dashboard suite covers discovery, valid and malformed JSONL parsing, absent exports and status files, null optional fields, deterministic duplicate handling, chronological transforms, missing measured values, anomaly positions and counts, forecast gating, WQI placement, English rendering, and Arabic RTL rendering.
 
 ## Scientific framing and WQI
@@ -350,6 +380,8 @@ WQI reference values are never used as operational chart limits or anomaly thres
 - **No authentication or operator write-back:** The dashboard does not implement accounts, acknowledgements, or incident management.
 - **Dataset shift and limited calibration:** Seasonal distribution shift and the limited sample size affect evaluation and drift diagnostics; see the reports below.
 - **Engineering bounds are not regulatory thresholds:** Physical validation bounds and anomaly defaults must be reviewed for any new site or operational use.
+- **Warm ingestion is manual:** Cold export and SQL ingestion are CLI operations; scheduling, retry orchestration, backup, and retention management are deployment work.
+- **No historical model-status contract:** Model metrics and pending approvals are current-only and are shown as unavailable in Historical archive mode.
 
 ## Reports and further documentation
 

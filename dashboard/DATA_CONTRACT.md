@@ -150,9 +150,9 @@ not drawn on operational monitoring charts and are not alert thresholds.
 
 ## 7. Current EC export quality note
 
-The inspected `exports/EC.jsonl` contains 49 valid, chronologically ordered rows
-with 49 unique timestamps: there are no duplicate timestamps. It contains 16
-measured rows and 33 prediction-only rows. Several research/replay runs record
+The inspected `exports/EC.jsonl` contains 103 valid, chronologically ordered rows
+with 103 unique timestamps: there are no duplicate timestamps. It contains 34
+measured rows and 69 prediction-only rows. Several research/replay runs record
 alternating measured values (`188.1742` and `769.0`) only fractions of a second
 apart; those genuine exported rows explain the closely spaced zigzag pattern.
 The dashboard preserves the records and the null-measurement gaps rather than
@@ -161,3 +161,32 @@ smoothing, substituting, or hiding them.
 The default `historical` source mode labels this as a historical dataset and
 disables operational freshness alerts. A future continuous deployment can set
 `WQD_DATA_SOURCE_MODE=continuous` after its cadence/SLA is approved.
+
+## 8. Cold export → Warm SQL → dashboard mapping
+
+The Hot contract above is unchanged. `run.py export-archive` copies the same
+measurement objects from the permanent Cold archive into a bounded flat JSONL
+file; `warm_tier_etl.py` validates and upserts those records into SQL Server.
+See [`WARM_TIER.md`](WARM_TIER.md) for setup and operational behavior.
+
+| Hot / Cold JSON field | Archive representation | Warm SQL column | Dashboard field | Handling |
+|---|---|---|---|---|
+| `timestamp` | ISO-8601 string | `MeasurementTimestamp datetimeoffset(7)` | `MeasurementRecord.timestamp` | Normalized to UTC; invalid rows rejected |
+| `parameter_name` | string | `ParameterName nvarchar(128)` | record field / map key | Generic; required |
+| `predicted_value` | number/null | `PredictedValue float NULL` | `predicted_value` | Numeric/null mapping |
+| `actual_value` | number/null | `ActualValue float NULL` | `actual_value` | Null preserved; never filled from prediction |
+| `shap_top_features` | JSON list | `ShapTopFeatures nvarchar(max)` | `shap_top_features` | Canonical JSON; `ISJSON` constraint |
+| `is_anomaly` | boolean/null | `IsAnomaly bit NULL` | `is_anomaly` | Three-state meaning preserved |
+| `anomaly_score` | number/null | `AnomalyScore float NULL` | `anomaly_score` | Null preserved |
+| `retrain_alert` | string/null | `RetrainAlert nvarchar(2048) NULL` | `retrain_alert` | Empty text normalized to null |
+| `forecast` | optional object | `ForecastJson nvarchar(max) NULL` | `forecast` | Schema-ready; current exports do not provide it |
+| not in record export | CLI/record metadata | `Unit nvarchar(64) NULL` | `ParameterData.unit` | Supplied during ingestion until exports carry units |
+| not in export | CLI configuration | `SiteId nvarchar(128)` | query scope | Added metadata |
+| not in export | filename | `SourceFile nvarchar(512)` | not displayed | Added lineage metadata |
+| normalized whole row | SHA-256 | `SourceRecordHash binary(32)` | not displayed | Idempotency/change detection |
+| not in export | SQL UTC default | `IngestedAt datetimeoffset(7)` | not displayed | Added ingestion metadata |
+
+`<parameter>_status.json` is not archived in SQL Server. Model performance,
+current model version, pending approvals, and rejection counts are unavailable
+in Historical archive mode; the dashboard does not mix current Hot status into
+historical views.

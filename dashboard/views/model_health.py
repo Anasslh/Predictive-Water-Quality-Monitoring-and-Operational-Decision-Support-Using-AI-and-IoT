@@ -43,11 +43,12 @@ def _parameter_health(ctx: AppContext, name: str, pdata) -> None:
         return
 
     perf = status.performance
-    skill_val = None if perf.insufficient_data else perf.skill_vs_persistence_pct
 
     metrics: list[tuple[str, str]] = []
-    if skill_val is not None:
-        metrics.append((tr.t("skill"), fmt_pct(skill_val)))
+    if perf.insufficient_data:
+        metrics.append((tr.t("skill"), tr.t("insufficient_data")))
+    elif perf.skill_vs_persistence_pct is not None:
+        metrics.append((tr.t("skill"), fmt_pct(perf.skill_vs_persistence_pct)))
     if perf.rmse is not None:
         metrics.append((tr.t("rmse"), fmt_number(perf.rmse)))
     if perf.mae is not None:

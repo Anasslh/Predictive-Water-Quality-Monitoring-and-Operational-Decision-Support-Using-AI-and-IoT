@@ -9,15 +9,13 @@ Drinking-water WQI references are intentionally confined to Methodology.
 from __future__ import annotations
 
 from datetime import datetime, time
-import pandas as pd
 import streamlit as st
 
 from dashboard.components import charts, layout
 from dashboard.components.format import DASH, fmt_timestamp, fmt_value
 from dashboard.components.shap_panel import render_shap
 from dashboard.context import AppContext
-from dashboard.models.schemas import ParameterData, MeasurementRecord
-from dashboard.services.db_service import fetch_historical_parameter_data
+from dashboard.models.schemas import ParameterData
 
 
 def render(ctx: AppContext) -> None:
@@ -33,42 +31,9 @@ def render(ctx: AppContext) -> None:
         key="detail_param",
     )
     
-    # ── HOT / WARM TIER ROUTING LOGIC ───────────────────────────────────────
-    use_warm_tier = st.toggle("Load 12-Month Historical Archive (Warm Tier Database)", value=False)
-    
-    hot_pdata = ctx.params[selected]
-    
-    if use_warm_tier:
-        with st.spinner(f"Querying local SQL Server for {selected} history..."):
-            historical_df = fetch_historical_parameter_data(selected)
-            warm_records = []
-            
-            if historical_df is not None and not historical_df.empty:
-                for _, row in historical_df.iterrows():
-                    try:
-                        obj = {
-                            "timestamp": str(row["timestamp"]),
-                            "parameter_name": selected,
-                            "predicted_value": None if pd.isna(row.get("predicted_value")) else row["predicted_value"],
-                            "actual_value": None if pd.isna(row.get("actual_value")) else row["actual_value"],
-                            "shap_top_features": row["shap_top_features"],
-                            "is_anomaly": None if pd.isna(row.get("is_anomaly")) else bool(row["is_anomaly"]),
-                            "anomaly_score": None if pd.isna(row.get("anomaly_score")) else row["anomaly_score"],
-                            "retrain_alert": None if pd.isna(row.get("retrain_alert")) else row["retrain_alert"]
-                        }
-                        warm_records.append(MeasurementRecord.from_dict(obj))
-                    except Exception:
-                        pass
-            
-            pdata = ParameterData(
-                name=selected,
-                unit=hot_pdata.unit,
-                records=warm_records,
-                status=hot_pdata.status,
-                load_errors=0
-            )
-    else:
-        pdata = hot_pdata
+    # Source routing is global in app.py. Every view receives the same selected
+    # ParameterData map, preventing Hot KPIs from being combined with Warm charts.
+    pdata = ctx.params[selected]
         
     unit = pdata.display_unit
 

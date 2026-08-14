@@ -13,6 +13,8 @@ Configuration is environment-driven (see dashboard/config/settings.py).
 from __future__ import annotations
 
 import sys
+from datetime import date, datetime, time, timedelta, timezone
+import hashlib
 from pathlib import Path
 from typing import Callable
 
@@ -32,6 +34,11 @@ from dashboard.i18n.translator import Translator  # noqa: E402
 from dashboard.models.schemas import ParameterData  # noqa: E402
 from dashboard.services.discovery import discover_parameters  # noqa: E402
 from dashboard.services.loaders import load_all_parameters  # noqa: E402
+from dashboard.services.db_service import (  # noqa: E402
+    WarmQueryResult,
+    WarmTierError,
+    fetch_historical_parameters,
+)
 from dashboard.services import transforms as tx  # noqa: E402
 from dashboard.views import (  # noqa: E402
     anomalies as v_anomalies,
@@ -84,6 +91,26 @@ def _exports_mtime(exports_dir: Path) -> float:
     return max(times) if times else 0.0
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _load_warm(
+    _connection_string: str,
+    connection_fingerprint: str,
+    site_id: str,
+    start_iso: str,
+    end_iso_exclusive: str,
+    timeout_seconds: int,
+) -> WarmQueryResult:
+    """Load one bounded historical range; never cache the connection secret."""
+    del connection_fingerprint  # non-secret cache partition; Streamlit hashes it
+    return fetch_historical_parameters(
+        _connection_string,
+        site_id,
+        datetime.fromisoformat(start_iso),
+        datetime.fromisoformat(end_iso_exclusive),
+        timeout_seconds=timeout_seconds,
+    )
+
+
 def main() -> None:
     settings = get_settings()
 
@@ -101,12 +128,7 @@ def main() -> None:
 
     layout.inject_theme(tr)
 
-    # Load before building navigation so optional views can be data-gated.
-    names, params = _load(
-        str(settings.exports_dir), settings.retention_days, _exports_mtime(settings.exports_dir)
-    )
-
-    # ── Sidebar: identity, language, navigation ─────────────────────────────
+    # ── Sidebar: identity and language ─────────────────────────────────────
     with st.sidebar:
         st.markdown(
             f'<div class="wq-side-title">{tr.t("app_title")}</div>'
@@ -124,30 +146,126 @@ def main() -> None:
         )
         tr = Translator(lang)  # reflect an in-place change immediately
         st.divider()
+
+        source_options = ["current"]
+        if settings.warm_configured:
+            source_options.append("archive")
+        source_labels = [
+            tr.t("historical_archive" if value == "archive" else "current_monitoring")
+            for value in source_options
+        ]
+        saved_source = st.session_state.get("_data_source_code", "current")
+        if saved_source not in source_options:
+            saved_source = "current"
+        expected_label = source_labels[source_options.index(saved_source)]
+        if st.session_state.get("data_source") not in source_labels:
+            st.session_state.pop("data_source", None)
+        source_label = st.radio(
+            tr.t("data_view"),
+            options=source_labels,
+            index=source_labels.index(expected_label),
+            key="data_source",
+        )
+        source = source_options[source_labels.index(source_label)]
+        st.session_state._data_source_code = source
+        if not settings.warm_configured:
+            st.caption(tr.t("historical_unavailable"))
+
+        warm_range: tuple[date, date] | None = None
+        if source == "archive":
+            today = datetime.now(timezone.utc).date()
+            earliest = today - timedelta(days=settings.warm_lookback_days - 1)
+            picked = st.date_input(
+                tr.t("historical_range"),
+                value=(earliest, today),
+                min_value=earliest,
+                max_value=today,
+                key="warm_date_range",
+            )
+            if isinstance(picked, (tuple, list)) and len(picked) == 2:
+                warm_range = (picked[0], picked[1])
+            elif isinstance(picked, date):
+                warm_range = (picked, picked)
+        st.divider()
+
+    source_error: str | None = None
+    if source == "archive":
+        start_date, end_date = warm_range or (
+            datetime.now(timezone.utc).date(),
+            datetime.now(timezone.utc).date(),
+        )
+        start_utc = datetime.combine(start_date, time.min, tzinfo=timezone.utc)
+        end_utc_exclusive = datetime.combine(
+            end_date + timedelta(days=1), time.min, tzinfo=timezone.utc
+        )
+        try:
+            with st.spinner(tr.t("warm_loading")):
+                warm_result = _load_warm(
+                    settings.db_connection_string,
+                    hashlib.sha256(
+                        settings.db_connection_string.encode("utf-8")
+                    ).hexdigest(),
+                    settings.effective_warm_site_id,
+                    start_utc.isoformat(),
+                    end_utc_exclusive.isoformat(),
+                    settings.db_timeout_seconds,
+                )
+            params = warm_result.params
+            names = list(params)
+        except WarmTierError as exc:
+            source_error = exc.code
+            names, params = [], {}
+    else:
+        names, params = _load(
+            str(settings.exports_dir),
+            settings.retention_days,
+            _exports_mtime(settings.exports_dir),
+        )
+
+    # ── Sidebar navigation (gated by the selected source) ───────────────────
+    with st.sidebar:
         views = available_views(params)
         labels = [tr.t(key) for key, _ in views]
         if st.session_state.get("nav") not in labels:
             st.session_state.pop("nav", None)
         choice = st.radio(tr.t("navigation"), options=labels, key="nav")
 
-    ctx = AppContext(settings=settings, tr=tr, params=params)
+    ctx = AppContext(settings=settings, tr=tr, params=params, data_source=source)
 
     # ── Header ──────────────────────────────────────────────────────────────
     last_update = fmt_timestamp(_latest_update(ctx))
+    effective_source_mode = "historical" if source == "archive" else settings.data_source_mode
     fresh_state = (
         tx.system_freshness(
             params,
             multiplier=settings.fresh_multiplier,
-            source_mode=settings.data_source_mode,
+            source_mode=effective_source_mode,
         )
         if params
         else "unknown"
     )
-    layout.page_header(tr, settings, freshness_state=fresh_state, last_update=last_update)
+    layout.page_header(
+        tr,
+        settings,
+        freshness_state=fresh_state,
+        last_update=last_update,
+        source_note_override=(tr.t("historical_archive") if source == "archive" else None),
+    )
+
+    if source_error:
+        key = f"warm_error_{source_error}"
+        st.error(tr.t(key))
 
     # ── No data → calm empty state ──────────────────────────────────────────
     if not names:
-        layout.empty_state(tr.t("no_parameters_title"), tr.t("no_parameters_body"), tone="neutral")
+        if source == "archive" and not source_error:
+            layout.empty_state(
+                tr.t("warm_no_records_title"), tr.t("warm_no_records_body"), tone="neutral"
+            )
+        elif not source_error:
+            layout.empty_state(
+                tr.t("no_parameters_title"), tr.t("no_parameters_body"), tone="neutral"
+            )
         return
 
     # ── Route to the selected view ──────────────────────────────────────────

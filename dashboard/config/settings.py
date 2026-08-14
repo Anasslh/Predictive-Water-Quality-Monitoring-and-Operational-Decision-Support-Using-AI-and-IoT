@@ -19,6 +19,10 @@ WQD_WATER_USE        Water-use profile: ``generalist`` | ``drinking`` | ``irriga
 WQD_DEFAULT_LANG     Default UI language: ``en`` | ``ar``.
 WQD_RETENTION_DAYS   Rolling window length in days (mirrors the pipeline export).
 WQD_FRESH_MULTIPLIER Data-freshness heuristic multiplier (see ASSUMPTIONS.md).
+DB_CONN_STR            SQL Server Warm-tier connection string. Unset disables Warm mode.
+WQD_WARM_SITE_ID       Site identifier used to scope historical SQL queries.
+WQD_WARM_LOOKBACK_DAYS Default and maximum historical query window.
+WQD_DB_TIMEOUT_SECONDS SQL connection and query timeout in seconds.
 """
 
 from __future__ import annotations
@@ -100,6 +104,33 @@ class Settings:
     # UI display heuristic, NOT a scientific threshold — see ASSUMPTIONS.md.
     fresh_multiplier: float = field(default_factory=lambda: _env_float("WQD_FRESH_MULTIPLIER", 3.0))
 
+    # Warm-tier settings. The connection string is deliberately excluded from
+    # repr so a Settings object cannot accidentally disclose credentials in a
+    # log or Streamlit exception. An unset value keeps the Hot-only dashboard
+    # fully functional and removes the historical-source selector.
+    db_connection_string: str = field(
+        default_factory=lambda: _env_str("DB_CONN_STR", ""), repr=False
+    )
+    warm_site_id: str = field(
+        default_factory=lambda: _env_str("WQD_WARM_SITE_ID", "")
+    )
+    warm_lookback_days: int = field(
+        default_factory=lambda: _env_int("WQD_WARM_LOOKBACK_DAYS", 365)
+    )
+    db_timeout_seconds: int = field(
+        default_factory=lambda: _env_int("WQD_DB_TIMEOUT_SECONDS", 5)
+    )
+
+    @property
+    def warm_configured(self) -> bool:
+        """Whether a SQL Server connection was explicitly configured."""
+        return bool(self.db_connection_string.strip())
+
+    @property
+    def effective_warm_site_id(self) -> str:
+        """Warm query site, falling back to the dashboard's configured site."""
+        return self.warm_site_id.strip() or self.site_id
+
     # WQI source CSV (processed training artifact — methodology page only).
     @property
     def wqi_csv(self) -> Path:
@@ -118,10 +149,14 @@ class Settings:
             if self.data_source_mode in DATA_SOURCE_MODES
             else "historical"
         )
+        lookback = max(1, min(self.warm_lookback_days, 3660))
+        timeout = max(1, min(self.db_timeout_seconds, 60))
         if (
             prof == self.water_use_profile
             and lang == self.default_lang
             and source_mode == self.data_source_mode
+            and lookback == self.warm_lookback_days
+            and timeout == self.db_timeout_seconds
         ):
             return self
         return Settings(
@@ -137,6 +172,10 @@ class Settings:
             default_lang=lang,
             retention_days=self.retention_days,
             fresh_multiplier=self.fresh_multiplier,
+            db_connection_string=self.db_connection_string,
+            warm_site_id=self.warm_site_id,
+            warm_lookback_days=lookback,
+            db_timeout_seconds=timeout,
         )
 
 
