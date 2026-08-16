@@ -64,8 +64,20 @@ def render(ctx: AppContext) -> None:
     # ── Data source & units ─────────────────────────────────────────────────
     rows = [
         (tr.t("data_source"), s.site_name),
-        (tr.t("data_status"), tr.t("source_historical") if s.data_source_mode == "historical" else tr.t("source_continuous")),
-        (tr.t("generated_from"), str(s.exports_dir)),
+        (
+            tr.t("data_status"),
+            tr.t("historical_archive")
+            if ctx.is_historical_archive
+            else (
+                tr.t("source_historical")
+                if s.data_source_mode == "historical"
+                else tr.t("source_continuous")
+            ),
+        ),
+        (
+            tr.t("generated_from"),
+            tr.t("historical_archive") if ctx.is_historical_archive else str(s.exports_dir),
+        ),
         (tr.t("profile"), tr.t(f"profile_{s.water_use_profile}")),
     ]
     for name, pdata in ctx.params.items():
@@ -74,6 +86,8 @@ def render(ctx: AppContext) -> None:
         if pdata.status and pdata.status.model_version:
             rows.append((f"{name} · {tr.t('model_version')}", pdata.status.model_version))
     layout.kv_table(rows)
+    if ctx.is_historical_archive:
+        layout.notice(tr.t("current_status_unavailable_archive"))
 
     # ── Known limitations ───────────────────────────────────────────────────
     layout.section(tr.t("known_limitations"))

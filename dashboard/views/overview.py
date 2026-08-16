@@ -23,7 +23,7 @@ def render(ctx: AppContext) -> None:
     # ── Top-line system KPIs ────────────────────────────────────────────────
     n_params = len(ctx.params)
     n_anom = tx.count_active_anomalies(ctx.params)
-    n_reviews = tx.count_pending_reviews(ctx.params)
+    n_reviews = None if ctx.is_historical_archive else tx.count_pending_reviews(ctx.params)
 
     c1, c2, c3 = st.columns(3)
     with c1:
@@ -35,8 +35,10 @@ def render(ctx: AppContext) -> None:
         )
     with c3:
         layout.kpi_tile(
-            tr.t("pending_reviews"), str(n_reviews),
+            tr.t("pending_reviews"),
+            tr.t("not_available") if n_reviews is None else str(n_reviews),
             status="warn" if n_reviews else "neutral",
+            sub=(tr.t("current_status_unavailable_archive") if n_reviews is None else None),
         )
 
     # ── Per-parameter cards ─────────────────────────────────────────────────
@@ -62,7 +64,7 @@ def _parameter_card(ctx: AppContext, name: str, pdata) -> None:
         pdata,
         now=ctx.now,
         multiplier=ctx.settings.fresh_multiplier,
-        source_mode=ctx.settings.data_source_mode,
+        source_mode=("historical" if ctx.is_historical_archive else ctx.settings.data_source_mode),
     )
     model = tx.model_status(pdata)
 

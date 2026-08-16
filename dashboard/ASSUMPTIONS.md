@@ -27,3 +27,24 @@ approval.
   includes valid forecast data (see `DATA_CONTRACT.md`).
 - No R² or drift status — unavailable optional fields are omitted.
 - No model-health pass/fail, regulatory compliance state, or operator action.
+
+## Warm historical tier
+
+- SQL Server is optional and environment-configured. An unset connection string
+  leaves Current monitoring operational.
+- One deployment queries one configured `SiteId`; operator site switching is
+  outside this MVP.
+- Historical queries are bounded to the configured lookback (365 days by
+  default) and load that result into memory.
+- Cold export and SQL ingestion are manual CLI operations; no scheduler or
+  background retry worker is assumed.
+- Duplicate identity is `(SiteId, ParameterName, MeasurementTimestamp)`. The
+  last complete valid input row wins, and SQL reingestion inserts, replaces the
+  whole changed record, or leaves an identical record unchanged.
+- Current model performance and pending approvals are deliberately unavailable
+  in Historical archive mode because status snapshots are not archived.
+- Units are supplied during ingestion because the measurement archive contract
+  currently has no unit field.
+- Local development may trust a local certificate. Production requires an
+  approved certificate, secret injection, least-privilege permissions, backup,
+  retention, and licensing decisions.

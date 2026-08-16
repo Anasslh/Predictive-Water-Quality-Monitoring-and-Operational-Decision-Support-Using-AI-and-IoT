@@ -9,3 +9,4 @@ streamlit>=1.36        # dashboard runtime (st.navigation, AppTest testing API)
 plotly>=5.22           # charts
 pandas>=2.0            # WQI CSV + anomalies table
 pytest>=7.0            # test suite (dashboard/tests)
+pyodbc>=5.1            # optional SQL Server Warm-tier access; Hot mode remains available without configuration

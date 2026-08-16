@@ -54,6 +54,7 @@ def page_header(
     *,
     freshness_state: str,
     last_update: str,
+    source_note_override: str | None = None,
 ) -> None:
     """Global header band: title, source, last update and source-state pill."""
     fg, bg = status_colors(
@@ -71,7 +72,7 @@ def page_header(
         if settings.data_source_mode == "historical"
         else tr.t("source_continuous")
     )
-    source_note = settings.data_source_note or default_note
+    source_note = source_note_override or settings.data_source_note or default_note
     st.markdown(
         '<div class="wq-header">'
         '<div class="wq-header-main">'

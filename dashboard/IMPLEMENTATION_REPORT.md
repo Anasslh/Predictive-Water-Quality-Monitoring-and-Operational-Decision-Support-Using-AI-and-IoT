@@ -88,17 +88,21 @@ No ML pipeline file was changed. (`.venv/` was already ignored.)
 
 ## 6. Tests run and results
 
-Command (from repo root):
+Command (from repo root, in a working project environment):
 ```
-.venv/Scripts/python -m pytest dashboard/tests -q
+python -m pytest dashboard/tests -q
 ```
 
-**Latest automated result: 63 passed in 5.55 s.** Coverage includes discovery,
+**Latest audit result: 89 unit/Streamlit tests plus 1 live SQL Server integration
+test passed (90 passed in 2.50 s when the gated integration connection was
+configured).** Coverage includes discovery,
 valid/malformed/empty/missing exports, null status optionals, duplicate and
 out-of-order records, single and consecutive measured-value gaps, no
 measured/predicted substitution, chart naming/tooltips/dashes, anomaly marker
 positions, affected-parameter anomaly counts, source-aware freshness, Forecast
-navigation gating, WQI confinement, and all visible EN/AR views.
+navigation gating, WQI confinement, all visible EN/AR views, Warm configuration,
+schema initialization, transactional ingestion, idempotent reingestion, bounded
+historical queries, null/anomaly preservation, and safe connection failures.
 
 The final live-browser review is performed against the repository's real EC
 exports using the documented local command. Runtime URL and final verification
@@ -126,3 +130,31 @@ results are reported in the task handoff rather than asserted here permanently.
 4. Deployment target + auth once chosen.
 5. Approve continuous-source freshness SLA and model-health classification rules
    before enabling live alert/status semantics.
+
+## 9. Warm Tier readiness audit (August 2026)
+
+The initially submitted Warm change assumed an externally created
+`Fact_WaterQuality` table and placed an English-only toggle inside Parameter
+Detail. It had no migration, dependency declaration, idempotency policy, bounded
+query, tests, or documentation, and it combined Warm measurements with Hot model
+status. It was not an end-to-end engineered integration.
+
+The audit-branch correction adds:
+
+- versioned, idempotent SQL Server database/schema scripts;
+- a generic site/parameter/time schema with nullable contract fields, JSON
+  constraints, deterministic identity, lineage metadata, and supporting indexes;
+- validated transactional CLI ingestion with whole-record upsert semantics;
+- a read-only bounded SQL query service with safe localized error categories;
+- a global operator-facing Current monitoring / Historical archive selector;
+- consistent source data across every dashboard view and no Hot status mixing;
+- English/Arabic archive UI and the previously unused localized
+  `insufficient_data` Skill KPI value;
+- unit, Streamlit, and separately gated live SQL Server integration tests; and
+- `WARM_TIER.md` plus Hot/Cold/Warm field mapping in `DATA_CONTRACT.md`.
+
+The verified integration remains manually triggered. It does not include a
+scheduler, automatic retries, historical model-performance/status storage,
+multi-site UI, pagination, database backups, or production security operations.
+SQL Server is reasonable for a Microsoft-oriented deployment but carries local
+reproducibility and operational dependencies documented in `WARM_TIER.md`.

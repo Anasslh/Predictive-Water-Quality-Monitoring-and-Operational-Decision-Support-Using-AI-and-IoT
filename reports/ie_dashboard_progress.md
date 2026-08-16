@@ -48,3 +48,22 @@ Full detail: `dashboard/IMPLEMENTATION_REPORT.md`,
 2. Generate pH / Turbidity exports to populate the multi-parameter overview.
 3. Approve continuous-source freshness SLA and model-health classification rules.
 4. Decide deployment target and authentication.
+
+## Warm historical tier audit — August 2026
+
+- Verified that the first SQL Server submission was committed on remote `main`
+  but was not reproducible or globally integrated.
+- Added a versioned SQL schema, safe environment-driven configuration,
+  validated/idempotent archive ingestion, bounded read-only queries, and a
+  global Current monitoring / Historical archive source selector on an audit
+  branch pending review.
+- Preserved parameter genericity, null measured values, anomaly meaning,
+  chronological sorting, read-only dashboard behavior, and Methodology-only WQI.
+- Warm mode deliberately omits current model status and pending approvals until
+  a historical status contract exists.
+- Cold export and SQL ingestion remain manual; no automation is claimed.
+- Added unit/Streamlit coverage and a separately gated live SQL Server
+  integration test. Exact final counts and runtime evidence belong in the audit
+  handoff after the complete suite and browser review.
+
+Full Warm architecture and setup: `dashboard/WARM_TIER.md`.
